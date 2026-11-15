@@ -1,0 +1,65 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ShapeView } from '../components/Shapes.jsx';
+import { contentBounds } from './geometry.js';
+
+export function buildSVG(shapes, dark) {
+  const b = contentBounds(shapes);
+  const pad = 40;
+  const vb = b
+    ? { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 }
+    : { x: 0, y: 0, w: 800, h: 600 };
+  const bg = dark ? '#1c1917' : '#fbf8f2';
+  const markup = renderToStaticMarkup(
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`}
+      width={vb.w}
+      height={vb.h}
+    >
+      <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={bg} />
+      {shapes.map((s) => (
+        <ShapeView key={s.id} shape={s} dark={dark} />
+      ))}
+    </svg>,
+  );
+  return { svg: `<?xml version="1.0" encoding="UTF-8"?>${markup}`, w: vb.w, h: vb.h };
+}
+
+export function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function exportSVG(shapes, dark, name = 'sketch') {
+  const { svg } = buildSVG(shapes, dark);
+  download(new Blob([svg], { type: 'image/svg+xml' }), `${name}.svg`);
+}
+
+export function exportPNG(shapes, dark, name = 'sketch') {
+  const { svg, w, h } = buildSVG(shapes, dark);
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+  const img = new Image();
+  img.onload = () => {
+    const scale = 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0, w, h);
+    canvas.toBlob((blob) => download(blob, `${name}.png`), 'image/png');
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+}
+
+export function exportJSON(shapes, dark, name = 'sketch') {
+  download(
+    new Blob([JSON.stringify({ version: 1, shapes, dark }, null, 2)], { type: 'application/json' }),
+    `${name}.json`,
+  );
+}
