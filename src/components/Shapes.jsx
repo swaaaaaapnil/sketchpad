@@ -39,9 +39,7 @@ function shapePaths(s, dark) {
     bowing: 1,
     seed: s.seed,
     fill,
-    fillStyle: 'hachure',
-    fillWeight: 1.5,
-    hachureGap: 9,
+    fillStyle: 'solid',
   };
 
   switch (s.type) {
