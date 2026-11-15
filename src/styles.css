@@ -524,7 +524,7 @@ kbd {
     padding: 8px 10px;
   }
   .shortcut-help { display: none; }
-  .zoom-bar { right: 8px; }
+  .zoom-bar { right: 8px; bottom: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
