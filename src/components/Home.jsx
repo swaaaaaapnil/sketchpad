@@ -105,9 +105,9 @@ export default function Home({ dark, setDark, onOpen }) {
           <strong>Sketchpad</strong>
         </div>
         <div className="top-actions">
-          <span className={`backend-badge is-${backendName}`} title={backendName === 'supabase' ? 'Boards sync to your Supabase project' : 'Add Supabase keys in .env.local to sync'}>
+          <span className={`backend-badge is-${backendName}`} title={backendName === 'supabase' ? 'Your boards save to the cloud automatically' : 'Your boards are saved in this browser'}>
             <i aria-hidden="true" />
-            {backendName === 'supabase' ? 'Synced with Supabase' : 'Saved in this browser'}
+            {backendName === 'supabase' ? 'Saved to cloud' : 'Saved in this browser'}
           </span>
           <button className="icon-btn" onClick={() => setDark((d) => !d)} aria-label="Toggle dark mode">{dark ? '☾' : '☀'}</button>
         </div>
@@ -171,10 +171,6 @@ export default function Home({ dark, setDark, onOpen }) {
           </div>
         )}
       </section>
-
-      <footer className="home-foot">
-        Local-first sketching · {backendName === 'supabase' ? 'Supabase Postgres with row-level security' : 'stored in localStorage'}
-      </footer>
     </div>
   );
 }

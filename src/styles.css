@@ -726,8 +726,6 @@ kbd {
 }
 .board-empty .hint-title { font-family: var(--font-display); font-size: 28px; color: var(--ink); }
 .board-empty:hover { border-color: var(--accent); }
-.home-foot { text-align: center; font-size: 12px; color: var(--muted); padding: 24px 16px 32px; }
-
 @media (max-width: 760px) {
   .title-input { width: 44vw; font-size: 18px; }
   .save-state em { display: none; }

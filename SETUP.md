@@ -17,7 +17,7 @@ With no Supabase keys, boards are saved in this browser's localStorage (`sketchp
 2. `cp .env.example .env.local` and fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (Project Settings → API).
 3. Apply the migrations in `supabase/migrations/` in order, with `supabase db push` or by pasting each file into the SQL editor. The first creates the `boards` table, with row-level security so that `owner = auth.uid()`; the second adds size and per-user board limits. File names start with the version Supabase records, so the GitHub integration won't re-run them.
 4. Authentication → Providers → turn on **Anonymous sign-ins**. Each browser gets its own user automatically.
-5. Restart `npm run dev`. The badge should read "Synced with Supabase".
+5. Restart `npm run dev`. The badge should read "Saved to cloud".
 
 ## "Draw with AI" (optional)
 

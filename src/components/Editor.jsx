@@ -753,7 +753,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
             <span className={`save-state is-${save.state}`} title={save.message || ''}>
               <i aria-hidden="true" />
               {saveLabel}
-              <em>{backendName === 'supabase' ? ' · Supabase' : ' · this browser'}</em>
+              <em>{backendName === 'supabase' ? ' · cloud' : ' · this browser'}</em>
             </span>
           </div>
         </div>
