@@ -6,7 +6,12 @@ import { ToolRail, StylePanel } from './Toolbar.jsx';
 import AIPanel from './AIPanel.jsx';
 import {
   DEFAULT_STYLE,
+  bendFromPoint,
+  cloneShapes,
   contentBounds,
+  curveMid,
+  detachMoved,
+  findBindTarget,
   createShape,
   getBounds,
   hitTest,
@@ -16,6 +21,7 @@ import {
   pointOnFill,
   LIGHT_INK,
   resizeBox,
+  routeConnectors,
   scaleShape,
   shapesInRect,
   translateShape,
@@ -27,9 +33,10 @@ gsap.registerPlugin(useGSAP);
 
 const HIT_PX = 6;
 const HANDLE_PX = 7;
+const BIND_PX = 14; // how close (screen px) an arrow end must come to a shape to snap onto it
 const KEY_TOOLS = { v: 'select', r: 'rect', o: 'ellipse', d: 'diamond', l: 'line', a: 'arrow', p: 'pen', t: 'text', e: 'eraser', h: 'hand' };
 const STICKY = new Set(['pen', 'eraser', 'hand']); // stay active without the lock
-const HANDLE_CURSOR = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', p1: 'move', p2: 'move' };
+const HANDLE_CURSOR = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', p1: 'move', p2: 'move', mid: 'grab' };
 const SHORTCUTS = [
   ['Tools', 'V R O D L A P T E H'],
   ['Keep tool active', 'Q'],
@@ -44,6 +51,9 @@ const SHORTCUTS = [
   ['Bring to front · back', '] · ['],
   ['Edit text', 'Double-click'],
   ['Keep proportions', 'Shift while resizing'],
+  ['Connect an arrow', 'Draw from shape to shape'],
+  ['Curve an arrow', 'Drag its middle dot'],
+  ['Arrow without snapping', '⌘ while drawing'],
   ['Undo · Redo', '⌘Z · ⇧⌘Z'],
   ['Delete', '⌫'],
 ];
@@ -73,6 +83,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   const [cam, setCam] = useState({ x: 0, y: 0, z: 1 });
   const [draft, setDraft] = useState(null);
   const [marquee, setMarquee] = useState(null);
+  const [bindHint, setBindHint] = useState(null); // id of the shape an arrow end will snap to
   const [textEdit, setTextEdit] = useState(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -192,7 +203,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   const commit = useCallback((before, next) => {
     setPast((p) => [...p.slice(-99), before]);
     setFuture([]);
-    setShapes(next);
+    setShapes(routeConnectors(next));
   }, []);
 
   const undo = () => {
@@ -223,7 +234,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
 
   function pasteShapes(list, offset = 24) {
     if (!list.length) return;
-    const copies = list.map((s) => translateShape({ ...s, id: makeId() }, offset, offset));
+    const copies = cloneShapes(list).map((s) => translateShape(s, offset, offset));
     commit(shapes, [...shapes, ...copies]);
     setSelected(copies.map((c) => c.id));
     setTool('select');
@@ -248,7 +259,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
 
   function nudge(dx, dy) {
     if (!selected.length) return;
-    commit(shapes, shapes.map((s) => (selSet.has(s.id) ? translateShape(s, dx, dy) : s)));
+    commit(shapes, detachMoved(shapes.map((s) => (selSet.has(s.id) ? translateShape(s, dx, dy) : s)), selSet));
   }
 
   function clearAll() {
@@ -315,7 +326,10 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
 
   function handlePoints() {
     if (!selBox || tool !== 'select' || textEdit) return [];
-    if (isLine) return [['p1', single.x, single.y], ['p2', single.x2, single.y2]];
+    if (isLine) {
+      const m = curveMid(single);
+      return [['p1', single.x, single.y], ['p2', single.x2, single.y2], ['mid', m.x, m.y]];
+    }
     const { x, y, w, h } = selBox;
     const corners = [['nw', x, y], ['ne', x + w, y], ['se', x + w, y + h], ['sw', x, y + h]];
     if (single?.type === 'text') return corners;
@@ -360,7 +374,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       const handle = handleAt(p);
       if (handle) {
         drag.current = isLine
-          ? { mode: 'endpoint', id: single.id, which: handle, before: shapes, latest: shapes }
+          ? { mode: handle === 'mid' ? 'bend' : 'endpoint', id: single.id, which: handle, before: shapes, latest: shapes }
           : { mode: 'resize', handle, box0: selBox, origs: new Map(selShapes.map((s) => [s.id, s])), before: shapes, latest: shapes };
         return capture(e);
       }
@@ -380,7 +394,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         let moveIds = ids;
         if (e.altKey) {
           // Alt + drag leaves a copy behind and drags the duplicate.
-          const copies = shapes.filter((s) => ids.includes(s.id)).map((s) => ({ ...s, id: makeId() }));
+          const copies = cloneShapes(shapes.filter((s) => ids.includes(s.id)));
           before = [...shapes, ...copies];
           moveIds = copies.map((c) => c.id);
           setShapes(before);
@@ -406,6 +420,11 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     }
 
     const shape = createShape(tool, p, style);
+    if ((tool === 'line' || tool === 'arrow') && !(e.metaKey || e.ctrlKey)) {
+      // Start on (or next to) a shape: the arrow attaches to it.
+      const target = findBindTarget(shapes, p, BIND_PX / cam.z);
+      if (target) shape.startBind = target.id;
+    }
     setDraft(shape);
     setSelected([]);
     drag.current = { mode: 'draw', start: p, draft: shape, before: shapes };
@@ -444,22 +463,50 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       if (!d.moved && Math.hypot(dx, dy) * cam.z < 2) return;
       d.moved = true;
       const byId = new Map(d.origs.map((s) => [s.id, translateShape(s, dx, dy)]));
-      d.latest = d.before.map((s) => byId.get(s.id) ?? s);
+      d.latest = routeConnectors(detachMoved(d.before.map((s) => byId.get(s.id) ?? s), d.set));
       setShapes(d.latest);
       return;
     }
 
     if (d.mode === 'resize') {
       const nb = resizeBox(d.box0, d.handle, p, e.shiftKey);
-      d.latest = d.before.map((s) => (d.origs.has(s.id) ? scaleShape(d.origs.get(s.id), d.box0, nb) : s));
+      d.latest = routeConnectors(d.before.map((s) => (d.origs.has(s.id) ? scaleShape(d.origs.get(s.id), d.box0, nb) : s)));
       setShapes(d.latest);
       return;
     }
 
     if (d.mode === 'endpoint') {
-      d.latest = d.before.map((s) =>
-        s.id !== d.id ? s : d.which === 'p1' ? { ...s, x: p.x, y: p.y } : { ...s, x2: p.x, y2: p.y },
-      );
+      const orig = d.before.find((s) => s.id === d.id);
+      const start = d.which === 'p1';
+      const key = start ? 'startBind' : 'endBind';
+      const other = start ? orig.endBind : orig.startBind;
+      const target = e.metaKey || e.ctrlKey ? null : findBindTarget(d.before, p, BIND_PX / cam.z, [d.id, other].filter(Boolean));
+      const next = start ? { ...orig, x: p.x, y: p.y } : { ...orig, x2: p.x, y2: p.y };
+      if (target) next[key] = target.id;
+      else delete next[key];
+      setBindHint(target?.id ?? null);
+      d.latest = routeConnectors(d.before.map((s) => (s.id === d.id ? next : s)));
+      setShapes(d.latest);
+      return;
+    }
+
+    if (d.mode === 'bend') {
+      const orig = d.before.find((s) => s.id === d.id);
+      // Bound ends slide as the curve changes, so refine a few times to keep the handle under the pointer.
+      // Damped fixed-point iteration: converges onto the pointer in a few steps.
+      let cur = orig;
+      let latest = d.before;
+      let bend = 0, skew = 0;
+      for (let i = 0; i < 8; i++) {
+        const t = bendFromPoint(cur, p);
+        bend = i ? (bend + t.bend) / 2 : t.bend;
+        skew = i ? (skew + t.skew) / 2 : t.skew;
+        const snap = Math.abs(bend) * cam.z < 8; // snap back to straight
+        latest = routeConnectors(d.before.map((s) => (s.id === d.id ? { ...orig, bend: snap ? 0 : bend, skew: snap ? 0 : skew } : s)));
+        cur = latest.find((s) => s.id === d.id);
+        if (snap) break;
+      }
+      d.latest = latest;
       setShapes(d.latest);
       return;
     }
@@ -479,7 +526,9 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         next = { ...s, points: [...s.points, [p.x, p.y, e.pressure || 0.5]] };
       } else if (s.type === 'line' || s.type === 'arrow') {
         let x2 = p.x, y2 = p.y;
-        if (e.shiftKey) {
+        const target = e.metaKey || e.ctrlKey ? null : findBindTarget(shapes, p, BIND_PX / cam.z, s.startBind ? [s.startBind] : []);
+        setBindHint(target?.id ?? null);
+        if (e.shiftKey && !target) {
           // snap to 15° steps
           const ang = Math.round(Math.atan2(y2 - s.y, x2 - s.x) / (Math.PI / 12)) * (Math.PI / 12);
           const len = Math.hypot(x2 - s.x, y2 - s.y);
@@ -487,6 +536,12 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
           y2 = s.y + Math.sin(ang) * len;
         }
         next = { ...s, x2, y2 };
+        if (target) next.endBind = target.id;
+        else delete next.endBind;
+        if (next.startBind || next.endBind) {
+          const [routed] = routeConnectors([...shapes, next]).slice(-1);
+          next = routed;
+        }
       } else {
         let w = p.x - d.start.x, h = p.y - d.start.y;
         if (e.shiftKey) {
@@ -504,6 +559,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   function onPointerUp() {
     const d = drag.current;
     drag.current = null;
+    setBindHint(null);
     if (!d) return;
 
     if (d.mode === 'move') {
@@ -511,7 +567,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       else if (d.before !== d.base) setShapes(d.base); // alt-click without drag: drop the copy
       return;
     }
-    if ((d.mode === 'resize' || d.mode === 'endpoint' || d.mode === 'erase') && d.latest !== d.before) {
+    if ((d.mode === 'resize' || d.mode === 'endpoint' || d.mode === 'bend' || d.mode === 'erase') && d.latest !== d.before) {
       commit(d.before, d.latest);
       return;
     }
@@ -629,7 +685,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     try {
       const data = JSON.parse(await file.text());
       if (!Array.isArray(data.shapes)) throw new Error('Not a sketch file');
-      const added = data.shapes.map((s) => ({ ...s, id: makeId() }));
+      const added = cloneShapes(data.shapes);
       commit(shapes, [...shapes, ...added]);
       setSelected(added.map((s) => s.id));
       say(`Imported ${added.length} shapes`);
@@ -842,12 +898,30 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
                 y={hy - 5 / z}
                 width={10 / z}
                 height={10 / z}
-                rx={id.startsWith('p') ? 5 / z : 2.5 / z}
-                className="sel-handle"
+                rx={id.startsWith('p') || id === 'mid' ? 5 / z : 2.5 / z}
+                className={id === 'mid' ? 'sel-handle is-bend' : 'sel-handle'}
                 strokeWidth={1.5 / z}
                 pointerEvents="none"
               />
             ))}
+            {bindHint && (() => {
+              const t = shapes.find((s) => s.id === bindHint);
+              if (!t) return null;
+              const b = getBounds(t);
+              const pad = 6 / z;
+              return (
+                <rect
+                  x={b.x - pad}
+                  y={b.y - pad}
+                  width={b.w + pad * 2}
+                  height={b.h + pad * 2}
+                  rx={t.type === 'ellipse' ? Math.min(b.w, b.h) / 2 + pad : 8 / z}
+                  className="bind-hint"
+                  strokeWidth={2 / z}
+                  pointerEvents="none"
+                />
+              );
+            })()}
             {marquee && (
               <rect
                 x={Math.min(marquee.x, marquee.x + marquee.w)}

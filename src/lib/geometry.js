@@ -52,12 +52,12 @@ export function getBounds(s) {
     };
   }
   if (s.type === 'line' || s.type === 'arrow') {
-    return {
-      x: Math.min(s.x, s.x2),
-      y: Math.min(s.y, s.y2),
-      w: Math.abs(s.x2 - s.x),
-      h: Math.abs(s.y2 - s.y),
-    };
+    const pts = connectorPoints(s);
+    const xs = pts.map((q) => q[0]);
+    const ys = pts.map((q) => q[1]);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    return { x: minX, y: minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY };
   }
   if (s.type === 'text') {
     const fs = s.fontSize || 24;
@@ -103,7 +103,7 @@ export function shapeContains(s, x, y, tol) {
   switch (s.type) {
     case 'line':
     case 'arrow':
-      return distToSegment(x, y, s.x, s.y, s.x2, s.y2) <= t;
+      return isCurved(s) ? nearPolyline(connectorPoints(s), x, y, t, false) : distToSegment(x, y, s.x, s.y, s.x2, s.y2) <= t;
     case 'pen':
       return s.points.length === 1
         ? Math.hypot(x - s.points[0][0], y - s.points[0][1]) <= t + s.strokeWidth
@@ -207,7 +207,7 @@ export function translateShape(s, dx, dy) {
 }
 
 export function duplicateShape(s, offset = 24) {
-  return translateShape({ ...s, id: makeId() }, offset, offset);
+  return translateShape(cloneShapes([s])[0], offset, offset);
 }
 
 export function createShape(type, p, style) {
@@ -243,4 +243,147 @@ export function isTrivial(s) {
   if (s.type === 'pen') return s.points.length < 2;
   if (s.type === 'line' || s.type === 'arrow') return Math.hypot(s.x2 - s.x, s.y2 - s.y) < 3;
   return s.w < 3 && s.h < 3;
+}
+
+/* ---------- connectors: snapping arrows to shapes, and curved arrows ---------- */
+
+export const isConnector = (s) => s.type === 'line' || s.type === 'arrow';
+const BINDABLE = new Set(['rect', 'ellipse', 'diamond', 'text']);
+const BIND_GAP = 6; // world px between an arrow tip and the outline it points at
+
+/** Shape an arrow end at p should snap to: the topmost box/ellipse/diamond near p (text only as a fallback). */
+export function findBindTarget(shapes, p, tol, skipIds = []) {
+  let textHit = null;
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (!BINDABLE.has(s.type) || skipIds.includes(s.id)) continue;
+    const b = getBounds(s);
+    if (p.x < b.x - tol || p.x > b.x + b.w + tol || p.y < b.y - tol || p.y > b.y + b.h + tol) continue;
+    if (s.type !== 'text') return s;
+    textHit ??= s;
+  }
+  return textHit;
+}
+
+function center(s) {
+  const b = getBounds(s);
+  return { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+}
+
+/** Point on the outline of `s` (plus a small gap) in the direction of `toward`, measured from its center. */
+export function edgePoint(s, toward) {
+  const b = getBounds(s);
+  const c = center(s);
+  let dx = toward.x - c.x, dy = toward.y - c.y;
+  if (!dx && !dy) dy = -1;
+  const hw = b.w / 2 + BIND_GAP, hh = b.h / 2 + BIND_GAP;
+  let t;
+  if (s.type === 'ellipse') t = 1 / Math.hypot(dx / (hw || 1), dy / (hh || 1));
+  else if (s.type === 'diamond') t = 1 / (Math.abs(dx) / (hw || 1) + Math.abs(dy) / (hh || 1));
+  else t = Math.min(hw / (Math.abs(dx) || 1e-9), hh / (Math.abs(dy) || 1e-9));
+  return { x: c.x + dx * t, y: c.y + dy * t };
+}
+
+/** Unit normal of the segment a→b (rotated 90° counter-clockwise in screen space). */
+function normal(ax, ay, bx, by) {
+  const len = Math.hypot(bx - ax, by - ay) || 1;
+  return { x: -(by - ay) / len, y: (bx - ax) / len };
+}
+
+export const isCurved = (s) => !!(s.bend || s.skew);
+
+/**
+ * Where the curve passes halfway (the bend handle). It sits `bend` px off the
+ * straight midpoint, sideways, and `skew` × length along the line. Both are
+ * relative to the endpoints, so a curve keeps its shape as attached boxes move.
+ */
+export function curveMid(s) {
+  const n = normal(s.x, s.y, s.x2, s.y2);
+  const len = Math.hypot(s.x2 - s.x, s.y2 - s.y);
+  const b = s.bend || 0;
+  const k = (s.skew || 0) * len;
+  return { x: (s.x + s.x2) / 2 + n.x * b + n.y * k, y: (s.y + s.y2) / 2 + n.y * b - n.x * k };
+}
+
+/** Quadratic control point that makes the curve pass through curveMid. */
+export function curveControl(s) {
+  const m = curveMid(s);
+  return { x: 2 * m.x - (s.x + s.x2) / 2, y: 2 * m.y - (s.y + s.y2) / 2 };
+}
+
+/** { bend, skew } that put the curve's midpoint on point p. */
+export function bendFromPoint(s, p) {
+  const n = normal(s.x, s.y, s.x2, s.y2);
+  const len = Math.hypot(s.x2 - s.x, s.y2 - s.y) || 1;
+  const dx = p.x - (s.x + s.x2) / 2, dy = p.y - (s.y + s.y2) / 2;
+  const skew = Math.max(-0.45, Math.min(0.45, (dx * n.y - dy * n.x) / len));
+  return { bend: dx * n.x + dy * n.y, skew };
+}
+
+/** Polyline through a connector: two points when straight, sampled when curved. */
+export function connectorPoints(s, steps = 24) {
+  if (!isCurved(s)) return [[s.x, s.y], [s.x2, s.y2]];
+  const c = curveControl(s);
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps, u = 1 - t;
+    pts.push([u * u * s.x + 2 * u * t * c.x + t * t * s.x2, u * u * s.y + 2 * u * t * c.y + t * t * s.y2]);
+  }
+  return pts;
+}
+
+/**
+ * Re-point every bound connector end at the outline of the shape it is attached to.
+ * Each bound end aims at the curve's control point (or the other end), so arrows
+ * follow their boxes as they move or resize. Binds to deleted shapes are dropped.
+ */
+export function routeConnectors(shapes) {
+  if (!shapes.some((s) => isConnector(s) && (s.startBind || s.endBind))) return shapes;
+  const byId = new Map(shapes.map((s) => [s.id, s]));
+  let changed = false;
+  const out = shapes.map((s) => {
+    if (!isConnector(s) || (!s.startBind && !s.endBind)) return s;
+    const a = s.startBind && byId.get(s.startBind);
+    const b = s.endBind && byId.get(s.endBind);
+    // Anchors: a bound end anchors on its shape's center, a free end on itself.
+    const pa = a ? center(a) : { x: s.x, y: s.y };
+    const pb = b ? center(b) : { x: s.x2, y: s.y2 };
+    const aim = isCurved(s) ? curveControl({ x: pa.x, y: pa.y, x2: pb.x, y2: pb.y, bend: s.bend, skew: s.skew }) : null;
+    const start = a ? edgePoint(a, aim || pb) : pa;
+    const end = b ? edgePoint(b, aim || pa) : pb;
+    const next = { ...s, x: start.x, y: start.y, x2: end.x, y2: end.y };
+    if (s.startBind && !a) delete next.startBind;
+    if (s.endBind && !b) delete next.endBind;
+    if (next.x === s.x && next.y === s.y && next.x2 === s.x2 && next.y2 === s.y2 && !!a === !!s.startBind && !!b === !!s.endBind) return s;
+    changed = true;
+    return next;
+  });
+  return changed ? out : shapes;
+}
+
+/** Drop binds on moved connectors whose target did not move with them (dragging an arrow detaches it). */
+export function detachMoved(shapes, movedIds) {
+  return shapes.map((s) => {
+    if (!isConnector(s) || !movedIds.has(s.id)) return s;
+    const drop = (id) => id && !movedIds.has(id);
+    if (!drop(s.startBind) && !drop(s.endBind)) return s;
+    const next = { ...s };
+    if (drop(s.startBind)) delete next.startBind;
+    if (drop(s.endBind)) delete next.endBind;
+    return next;
+  });
+}
+
+/** Copies of `list` with fresh ids; binds follow their target when it is copied too, otherwise they are dropped. */
+export function cloneShapes(list) {
+  const ids = new Map(list.map((s) => [s.id, makeId()]));
+  return list.map((s) => {
+    const c = { ...s, id: ids.get(s.id) };
+    for (const key of ['startBind', 'endBind']) {
+      if (!s[key]) continue;
+      if (ids.has(s[key])) c[key] = ids.get(s[key]);
+      else delete c[key];
+    }
+    return c;
+  });
 }

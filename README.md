@@ -6,6 +6,7 @@ A whiteboard where everything you draw looks hand-drawn. You get boxes, ellipses
 
 - **Hand-drawn shapes:** made with roughjs and perfect-freehand on SVG. Each shape keeps its own random seed, so its wobble looks the same every time it renders.
 - **Infinite canvas:** pan, zoom, select, move, resize, duplicate, and 100 steps of undo/redo.
+- **Smart arrows:** an arrow end snaps to the shape under it and stays attached when that shape moves. Drag an arrow's middle dot to curve it. Hold Cmd/Ctrl while drawing to skip snapping.
 - **Export:** SVG, PNG and JSON. You can import JSON back in.
 - **Light and dark themes,** keyboard shortcuts, and autosave (Cmd/Ctrl+S saves straight away).
 - **Storage:**

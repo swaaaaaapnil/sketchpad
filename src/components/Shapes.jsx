@@ -1,5 +1,5 @@
 import rough from 'roughjs';
-import { penPath, resolveColor } from '../lib/geometry.js';
+import { curveControl, isCurved, penPath, resolveColor } from '../lib/geometry.js';
 
 const rc = rough.generator();
 
@@ -60,10 +60,13 @@ function shapePaths(s, dark, onFill) {
         ),
       );
     case 'line':
-      return toPaths(rc.line(s.x, s.y, s.x2, s.y2, opts));
     case 'arrow': {
-      const paths = toPaths(rc.line(s.x, s.y, s.x2, s.y2, opts));
-      const angle = Math.atan2(s.y2 - s.y, s.x2 - s.x) + Math.PI;
+      // Straight, or a quadratic curve when the bend handle has been dragged.
+      const c = isCurved(s) ? curveControl(s) : null;
+      const paths = toPaths(c ? rc.path(`M${s.x} ${s.y} Q${c.x} ${c.y} ${s.x2} ${s.y2}`, { ...opts, fill: undefined }) : rc.line(s.x, s.y, s.x2, s.y2, opts));
+      if (s.type === 'line') return paths;
+      const from = c || { x: s.x, y: s.y };
+      const angle = Math.atan2(s.y2 - from.y, s.x2 - from.x) + Math.PI;
       const head = Math.max(12, s.strokeWidth * 5);
       for (const offset of [-0.5, 0.5]) {
         const a = angle + offset;

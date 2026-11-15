@@ -573,6 +573,8 @@ kbd {
 .sel-box { fill: none; stroke: var(--accent); }
 .sel-each { fill: none; stroke: var(--accent); opacity: 0.5; }
 .sel-handle { fill: var(--surface); stroke: var(--accent); }
+.sel-handle.is-bend { fill: var(--accent); }
+.bind-hint { fill: color-mix(in srgb, var(--accent) 6%, transparent); stroke: var(--accent); }
 .marquee { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke: var(--accent); stroke-dasharray: 4 3; }
 
 .menu-note {
