@@ -551,7 +551,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       setTextEdit({ id: shape.id, x: shape.x, y: shape.y, value: shape.text, fontSize: shape.fontSize || 24, stroke: shape.stroke });
     } else {
       setSelected([]);
-      setTextEdit({ id: null, x: p.x, y: p.y, value: '', fontSize: style.fontSize || 24, stroke: style.stroke });
+      setTextEdit({ id: null, x: p.x, y: p.y, value: '', fontSize: Math.round((style.fontSize || 24) / Math.min(1, cam.z)), stroke: style.stroke });
     }
   }
 
