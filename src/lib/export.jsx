@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ShapeView } from '../components/Shapes.jsx';
-import { contentBounds } from './geometry.js';
+import { contentBounds, onFillIds } from './geometry.js';
 
 export function buildSVG(shapes, dark) {
   const b = contentBounds(shapes);
@@ -8,6 +8,7 @@ export function buildSVG(shapes, dark) {
   const vb = b
     ? { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 }
     : { x: 0, y: 0, w: 800, h: 600 };
+  const onFill = onFillIds(shapes);
   const bg = dark ? '#1c1917' : '#fbf8f2';
   const markup = renderToStaticMarkup(
     <svg
@@ -18,7 +19,7 @@ export function buildSVG(shapes, dark) {
     >
       <rect x={vb.x} y={vb.y} width={vb.w} height={vb.h} fill={bg} />
       {shapes.map((s) => (
-        <ShapeView key={s.id} shape={s} dark={dark} />
+        <ShapeView key={s.id} shape={s} dark={dark} onFill={onFill.has(s.id)} />
       ))}
     </svg>,
   );

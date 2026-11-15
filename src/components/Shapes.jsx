@@ -29,8 +29,8 @@ function toPaths(drawable) {
   return out;
 }
 
-function shapePaths(s, dark) {
-  const stroke = resolveColor(s.stroke, dark);
+function shapePaths(s, dark, onFill) {
+  const stroke = resolveColor(s.stroke, dark, onFill);
   const fill = s.fill && s.fill !== 'none' ? resolveColor(s.fill, dark) : undefined;
   const opts = {
     stroke,
@@ -82,13 +82,13 @@ function shapePaths(s, dark) {
   }
 }
 
-export function ShapeView({ shape, dark }) {
+export function ShapeView({ shape, dark, onFill = false }) {
   if (shape.type === 'text') {
     return (
       <text
         x={shape.x}
         y={shape.y + (shape.fontSize || 24)}
-        fill={resolveColor(shape.stroke, dark)}
+        fill={resolveColor(shape.stroke, dark, onFill)}
         fontSize={shape.fontSize || 24}
         fontFamily="'Caveat', 'Comic Sans MS', cursive"
         style={{ whiteSpace: 'pre', userSelect: 'none' }}
@@ -103,7 +103,7 @@ export function ShapeView({ shape, dark }) {
   }
   return (
     <g>
-      {shapePaths(shape, dark).map((p, i) => (
+      {shapePaths(shape, dark, onFill).map((p, i) => (
         <path
           key={i}
           d={p.d}

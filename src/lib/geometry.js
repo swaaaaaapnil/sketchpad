@@ -6,9 +6,35 @@ export function makeId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-export function resolveColor(color, dark) {
-  if (color === 'auto') return dark ? '#f5f0e8' : '#1c1917';
+export const LIGHT_INK = '#1c1917';
+
+export function resolveColor(color, dark, onFill = false) {
+  if (color === 'auto') return dark && !onFill ? '#f5f0e8' : LIGHT_INK;
   return color;
+}
+
+/** True when point (x, y) lies inside a filled shape drawn before index `below`. */
+export function pointOnFill(shapes, x, y, below = shapes.length, skipId) {
+  for (let i = Math.min(below, shapes.length) - 1; i >= 0; i--) {
+    const s = shapes[i];
+    if (s.id === skipId || !s.fill || s.fill === 'none') continue;
+    if (shapeContains(s, x, y, 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Ids of auto-colored text and pen strokes that sit on a filled shape. Fills are
+ * light pastels, so these switch to dark ink to stay readable in dark mode.
+ */
+export function onFillIds(shapes) {
+  const ids = new Set();
+  shapes.forEach((s, i) => {
+    if (s.stroke !== 'auto' || (s.type !== 'text' && s.type !== 'pen')) return;
+    const b = getBounds(s);
+    if (pointOnFill(shapes, b.x + b.w / 2, b.y + b.h / 2, i)) ids.add(s.id);
+  });
+  return ids;
 }
 
 export function getBounds(s) {

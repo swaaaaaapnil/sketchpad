@@ -3,7 +3,7 @@ import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 const Hero3D = lazy(() => import('./Hero3D.jsx'));
 import { ShapeView } from './Shapes.jsx';
-import { contentBounds } from '../lib/geometry.js';
+import { contentBounds, onFillIds } from '../lib/geometry.js';
 import { backendName, createBoard, deleteBoard, duplicateBoard, listBoards } from '../lib/store.js';
 
 gsap.registerPlugin(useGSAP);
@@ -20,10 +20,11 @@ function Thumb({ shapes, dark }) {
   const b = contentBounds(shapes);
   if (!b) return <div className="thumb is-empty">Empty page</div>;
   const pad = 24;
+  const onFill = onFillIds(shapes);
   return (
     <svg className="thumb" viewBox={`${b.x - pad} ${b.y - pad} ${b.w + pad * 2} ${b.h + pad * 2}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       {shapes.slice(0, 150).map((s) => (
-        <ShapeView key={s.id} shape={s} dark={dark} />
+        <ShapeView key={s.id} shape={s} dark={dark} onFill={onFill.has(s.id)} />
       ))}
     </svg>
   );

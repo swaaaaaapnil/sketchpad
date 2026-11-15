@@ -12,6 +12,9 @@ import {
   hitTest,
   isTrivial,
   makeId,
+  onFillIds,
+  pointOnFill,
+  LIGHT_INK,
   resizeBox,
   scaleShape,
   shapesInRect,
@@ -576,6 +579,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
 
   /* ---------- style ---------- */
 
+  const onFill = onFillIds(shapes);
   const shownStyle = single ? { ...style, stroke: single.stroke, fill: single.fill ?? 'none', strokeWidth: single.strokeWidth ?? 2 } : style;
 
   function applyStyle(patch) {
@@ -809,8 +813,8 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
           aria-label="Drawing canvas"
         >
           <g className="scene" transform={`translate(${cam.x} ${cam.y}) scale(${z})`}>
-            {shapes.map((s) => (textEdit?.id === s.id ? null : <ShapeView key={s.id} shape={s} dark={dark} />))}
-            {draft && <ShapeView shape={draft} dark={dark} />}
+            {shapes.map((s) => (textEdit?.id === s.id ? null : <ShapeView key={s.id} shape={s} dark={dark} onFill={onFill.has(s.id)} />))}
+            {draft && <ShapeView shape={draft} dark={dark} onFill={draft.type === 'pen' && draft.stroke === 'auto' && draft.points.length > 0 && pointOnFill(shapes, draft.points[0][0], draft.points[0][1])} />}
 
             {selShapes.length > 1 &&
               selShapes.map((s) => {
@@ -881,7 +885,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
               left: cam.x + textEdit.x * z,
               top: cam.y + textEdit.y * z,
               fontSize: textEdit.fontSize * z,
-              color: textEdit.stroke === 'auto' ? 'var(--ink)' : textEdit.stroke,
+              color: textEdit.stroke !== 'auto' ? textEdit.stroke : pointOnFill(shapes, textEdit.x + 4, textEdit.y + textEdit.fontSize * 0.6, shapes.length, textEdit.id) ? LIGHT_INK : 'var(--ink)',
             }}
             aria-label="Text"
             placeholder="Type · Enter to place · Shift+Enter for a new line"
