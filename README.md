@@ -11,7 +11,7 @@ A whiteboard where everything you draw looks hand-drawn. You get boxes, ellipses
 - **Storage:**
   - With no keys, boards stay in this browser's localStorage.
   - With Supabase keys, boards sync to Postgres. Each browser signs in anonymously, and row-level security means it only sees its own boards.
-- **Draw with AI (bring your own key):** each user pastes their own Anthropic or OpenAI key. Calls go straight from the browser to the provider and are billed to the user's own account. Local models through Ollama or LM Studio work too.
+- **Draw with AI (bring your own key):** each user pastes their own Anthropic or OpenAI key. Calls go straight from the browser to the provider and are billed to the user's own account.
 
 ## Stack
 
@@ -48,7 +48,7 @@ Browser (React SPA)
  │    └─ autosave (700 ms debounce)
  ├─ store.js ── localStorage                 (no keys)
  │           └─ Supabase Postgres + RLS      (keys present, anonymous auth)
- └─ AI panel ── Anthropic / OpenAI / Ollama  (user's own key, direct from browser)
+ └─ AI panel ── Anthropic / OpenAI           (user's own key, direct from browser)
 ```
 
 ## Scripts

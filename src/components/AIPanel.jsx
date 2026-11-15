@@ -155,7 +155,6 @@ export default function AIPanel({ open, onClose, onShapes }) {
         {error && <p className="error" role="alert">{error}</p>}
         <p className="fine">
           {provider === 'supabase' ? 'The model key lives on your Supabase edge function, never in the browser.' : `Your key goes straight from this browser to ${info.label.split(' ')[0]} and never touches our servers.${info.needsKey ? (remember ? ' It is saved in this browser only.' : ' It is forgotten when you close the tab.') : ''} Usage is billed to your own account.`}
-          {provider === 'ollama' && ' Start Ollama or LM Studio with CORS enabled for localhost.'}
         </p>
       </form>
     </aside>

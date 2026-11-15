@@ -15,7 +15,6 @@ export const PROVIDERS = {
   anthropic: { label: 'Anthropic (Claude)', baseUrl: '', model: 'claude-sonnet-5-5', needsKey: true, keyUrl: 'https://console.anthropic.com/settings/keys', keyHint: 'sk-ant-…' },
   openai: { label: 'OpenAI-compatible', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', needsKey: true, keyUrl: 'https://platform.openai.com/api-keys', keyHint: 'sk-…' },
   ...(serverAI ? { supabase: { label: 'Built-in (server key)', baseUrl: '', model: 'server default', needsKey: false } } : {}),
-  ollama: { label: 'Local (Ollama / LM Studio)', baseUrl: 'http://localhost:11434/v1', model: 'llama3.2', needsKey: false },
 };
 
 async function readError(res) {
