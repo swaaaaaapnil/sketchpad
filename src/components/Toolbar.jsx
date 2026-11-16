@@ -68,7 +68,7 @@ function ShapePicker({ tool, onTool }) {
   );
 }
 
-export function ToolRail({ tool, onTool, locked, onLock }) {
+export function ToolRail({ tool, onTool }) {
   return (
     <nav className="tool-rail" aria-label="Drawing tools">
       {TOOLS.map((t) => (
@@ -85,17 +85,6 @@ export function ToolRail({ tool, onTool, locked, onLock }) {
         </button>
       ))}
       <ShapePicker tool={tool} onTool={onTool} />
-      <span className="rail-sep" aria-hidden="true" />
-      <button
-        className={`tool-btn lock-btn ${locked ? 'is-active' : ''}`}
-        onClick={onLock}
-        title="Keep tool active after drawing (Q)"
-        aria-label="Keep tool active"
-        aria-pressed={locked}
-      >
-        <span aria-hidden="true">{locked ? '🔒' : '🔓'}</span>
-        <kbd>Q</kbd>
-      </button>
     </nav>
   );
 }

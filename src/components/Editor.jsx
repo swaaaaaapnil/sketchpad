@@ -39,7 +39,7 @@ import {
   BOX_TYPES,
   labelBox,
 } from '../lib/geometry.js';
-import { exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
+import { copyPNG, exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
 import { backendName, boardVersion, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinLive, joinPresence, myRole, onAccountChange, saveChanges, shareUrl, signInWithGoogle, signOut } from '../lib/store.js';
 import { addOps, applyOps, chunkOps, diffShapes, emptyOps, hasOps, opsToWire, orderKey, rebaseSnapshot, restoreOps } from '../lib/live.js';
 
@@ -110,7 +110,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [past, setPast] = useState([]);
   const [future, setFuture] = useState([]);
   const [tool, setTool] = useState('select');
-  const [locked, setLocked] = useState(false);
   const [style, setStyle] = useState(DEFAULT_STYLE);
   const [selected, setSelected] = useState([]);
   const [cam, setCam] = useState({ x: 0, y: 0, z: 1 });
@@ -1059,7 +1058,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       }
       if (isTrivial(s)) return;
       commit(d.before, [...d.before, s]);
-      if (!locked && !STICKY.has(tool)) {
+      if (!STICKY.has(tool)) {
         setTool('select');
         setSelected([s.id]);
       }
@@ -1128,7 +1127,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       commit(shapes, [...shapes, s]);
       setSelected([s.id]);
     }
-    if (!locked) setTool('select');
+    setTool('select');
   }
 
   /* ---------- style ---------- */
@@ -1172,6 +1171,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     if (kind === 'png') exportPNG(exportTarget, dark, safeTitle);
     if (kind === 'svg') exportSVG(exportTarget, dark, safeTitle);
     if (kind === 'json') exportJSON(exportTarget, dark, safeTitle);
+    if (kind === 'copy') copyPNG(exportTarget, dark).then(() => say('Copied image to clipboard'), () => say('Could not copy — your browser blocked it'));
   }
 
   async function onImportFile(e) {
@@ -1263,7 +1263,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       if (e.key === '?') return setHelpOpen((o) => !o);
       if (e.key === ']') return reorder(true);
       if (e.key === '[') return reorder(false);
-      if (k === 'q') return setLocked((l) => !l);
       if (KEY_TOOLS[k]) {
         setTool(KEY_TOOLS[k]);
         if (KEY_TOOLS[k] !== 'select') setSelected([]);
@@ -1352,8 +1351,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
             setTool(t);
             if (t !== 'select') setSelected([]);
           }}
-          locked={locked}
-          onLock={() => setLocked((l) => !l)}
         />}
 
         <div className="top-actions">
@@ -1420,7 +1417,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
             {exportOpen && (
               <div className="menu" role="menu">
                 <p className="menu-note">{selShapes.length ? `Selection · ${selShapes.length} shape${selShapes.length > 1 ? 's' : ''}` : 'Whole canvas'}</p>
-                <button role="menuitem" onClick={() => doExport('png')}>PNG image</button>
+                <button role="menuitem" onClick={() => doExport('png')}>PNG image (2×)</button>
+                <button role="menuitem" onClick={() => doExport('copy')}>Copy as image</button>
                 <button role="menuitem" onClick={() => doExport('svg')}>SVG vector</button>
                 <button role="menuitem" onClick={() => doExport('json')}>JSON (editable)</button>
                 {!readOnly && <>
@@ -1651,7 +1649,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
         <footer className="shortcut-help">
           {selected.length > 1 ? `${selected.length} selected · ` : ''}
-          {locked && tool !== 'select' ? <><b>{tool}</b> locked · </> : ''}
+          
           <kbd>Space</kbd> pan · <kbd>Shift</kbd> multi-select · <kbd>?</kbd> all shortcuts
         </footer>
 

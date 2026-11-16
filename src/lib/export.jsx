@@ -40,22 +40,36 @@ export function exportSVG(shapes, dark, name = 'sketch') {
   download(new Blob([svg], { type: 'image/svg+xml' }), `${name}.svg`);
 }
 
-export function exportPNG(shapes, dark, name = 'sketch') {
+/** Renders the shapes to a 2x PNG blob. */
+export function pngBlob(shapes, dark) {
   const { svg, w, h } = buildSVG(shapes, dark);
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
-  const img = new Image();
-  img.onload = () => {
-    const scale = 2;
-    const canvas = document.createElement('canvas');
-    canvas.width = w * scale;
-    canvas.height = h * scale;
-    const ctx = canvas.getContext('2d');
-    ctx.scale(scale, scale);
-    ctx.drawImage(img, 0, 0, w, h);
-    canvas.toBlob((blob) => download(blob, `${name}.png`), 'image/png');
-    URL.revokeObjectURL(url);
-  };
-  img.src = url;
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = 2;
+      const canvas = document.createElement('canvas');
+      canvas.width = w * scale;
+      canvas.height = h * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(scale, scale);
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('PNG failed'))), 'image/png');
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+export async function exportPNG(shapes, dark, name = 'sketch') {
+  download(await pngBlob(shapes, dark), `${name}.png`);
+}
+
+/** Copies a 2x PNG of the shapes to the clipboard. */
+export async function copyPNG(shapes, dark) {
+  // Safari needs the promise handed to ClipboardItem synchronously.
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob(shapes, dark) })]);
 }
 
 export function exportJSON(shapes, dark, name = 'sketch') {
