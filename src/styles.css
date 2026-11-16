@@ -961,3 +961,8 @@ kbd {
 .sp-copy { border: 1px solid var(--line); background: none; color: inherit; border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 .sp-copy:hover { background: var(--surface-2); }
 .editor-state .ghost-btn { margin-top: 8px; }
+
+/* Google's rendered sign-in button */
+.gsi-btn { min-height: 40px; display: flex; justify-content: center; }
+.signin-menu { right: 0; left: auto; width: 260px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.signin-menu .sp-note { margin: 0; }

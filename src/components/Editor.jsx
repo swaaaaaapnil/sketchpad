@@ -5,6 +5,7 @@ import { useGSAP } from '@gsap/react';
 import { ShapeView } from './Shapes.jsx';
 import { ToolRail, StylePanel } from './Toolbar.jsx';
 import AIPanel from './AIPanel.jsx';
+import GoogleButton from './GoogleButton.jsx';
 import {
   DEFAULT_STYLE,
   bendFromPoint,
@@ -88,6 +89,7 @@ const relTime = timeAgo;
 export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [signInOpen, setSignInOpen] = useState(false);
   // Re-render every 30s so "Saved 4 minutes ago" keeps counting up.
   const [, setClock] = useState(0);
   useEffect(() => {
@@ -1007,7 +1009,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       <div className="editor-state">
         <p className="hint-title">Sign in to edit this sketch</p>
         <p>You were invited to edit. Sign in with Google so others can see who made each change.</p>
-        <button className="primary-btn" onClick={doSignIn}>Sign in with Google</button>
+        <GoogleButton dark={dark} onFallback={doSignIn} onError={(e) => say(e.message)} />
         <button className="ghost-btn" onClick={onHome}>Not now</button>
       </div>
     );
@@ -1091,7 +1093,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
                 ) : isGuest ? (
                   <>
                     <p className="sp-note">Sign in with Google to share. Your sketches stay yours when you sign in.</p>
-                    <button className="sp-primary" onClick={doSignIn}>Sign in with Google</button>
+                    <GoogleButton dark={dark} fallbackClass="sp-primary" onFallback={doSignIn} onError={(e) => say(e.message)} />
                   </>
                 ) : (
                   <>
@@ -1140,7 +1142,15 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           <button className="icon-btn" onClick={() => setDark((d) => !d)} aria-label="Toggle dark mode" title="Toggle theme">{dark ? '☾' : '☀'}</button>
           {!readOnly && <button className="primary-btn small ai-btn" onClick={openAI} aria-expanded={aiOpen} aria-label="Draw with AI">✦<span> Draw with AI</span></button>}
           {canSignIn && (isGuest ? (
-            <button className="ghost-btn signin-btn" onClick={doSignIn}>Sign in</button>
+            <div className="menu-wrap">
+              <button className="ghost-btn signin-btn" onClick={() => setSignInOpen((o) => !o)} aria-expanded={signInOpen}>Sign in</button>
+              {signInOpen && (
+                <div className="menu signin-menu" role="dialog" aria-label="Sign in">
+                  <p className="sp-note">Sign in to share and use Draw with AI. Your sketches stay yours.</p>
+                  <GoogleButton dark={dark} onFallback={doSignIn} onDone={() => setSignInOpen(false)} onError={(e) => say(e.message)} />
+                </div>
+              )}
+            </div>
           ) : (
             <div className="menu-wrap">
               <button className="account-chip" onClick={() => setAccountOpen((o) => !o)} aria-expanded={accountOpen} aria-label="Account">

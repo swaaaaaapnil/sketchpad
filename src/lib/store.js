@@ -264,6 +264,10 @@ export async function signInWithGoogle() {
   const isGuest = !!session?.user?.is_anonymous;
   const id = await googleIdToken().catch(() => null);
   if (!id) return redirectSignIn(isGuest);
+  return finishIdToken(id, isGuest);
+}
+
+async function finishIdToken(id, isGuest) {
   const creds = { provider: 'google', token: id.token, nonce: id.nonce };
   if (isGuest) {
     const { error } = await supabase.auth.linkIdentity(creds);
@@ -272,6 +276,40 @@ export async function signInWithGoogle() {
   }
   const { error } = await supabase.auth.signInWithIdToken(creds);
   if (error) throw new Error(error.message);
+}
+
+/**
+ * Renders Google's own "Sign in with Google" button into `el`. Clicking it opens
+ * Google's popup (named after this site), then signs in / upgrades the guest.
+ * Returns false when Google's button can't be used, so the caller can show a fallback.
+ */
+export async function renderGoogleButton(el, { onDone, onError, theme = 'outline', text = 'signin_with' } = {}) {
+  if (!GOOGLE_CLIENT_ID || !el) return false;
+  needCloud();
+  try {
+    await loadGis();
+  } catch {
+    return false;
+  }
+  const nonce = crypto.randomUUID();
+  const hashed = await sha256Hex(nonce);
+  window.google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    nonce: hashed,
+    callback: async (r) => {
+      try {
+        if (!r?.credential) throw new Error('Google sign-in was cancelled');
+        const session = await ensureSession();
+        await finishIdToken({ token: r.credential, nonce }, !!session?.user?.is_anonymous);
+        onDone?.();
+      } catch (e) {
+        onError?.(e);
+      }
+    },
+  });
+  el.innerHTML = '';
+  window.google.accounts.id.renderButton(el, { theme, size: 'large', text, shape: 'pill', logo_alignment: 'left' });
+  return true;
 }
 
 /** Signs out, forgets this user's saved AI keys, and starts a fresh guest session. */
