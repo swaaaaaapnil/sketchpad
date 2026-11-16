@@ -193,13 +193,50 @@ export function onAccountChange(fn) {
   return () => data.subscription.unsubscribe();
 }
 
-/**
- * Google sign-in. A guest is upgraded in place (same user id, so their boards stay
- * theirs). If that Google account already exists, we sign in to it instead.
- */
-export async function signInWithGoogle() {
-  needCloud();
-  const session = await ensureSession();
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+function loadGis() {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Could not load Google sign-in'));
+    document.head.appendChild(s);
+  });
+}
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Google's own prompt, so the account chooser names this site instead of the
+// Supabase project. Resolves with { token, nonce }, or null if Google could not
+// show the prompt (blocked, dismissed, cooldown) so the caller can fall back.
+async function googleIdToken() {
+  if (!GOOGLE_CLIENT_ID) return null;
+  await loadGis();
+  const nonce = crypto.randomUUID();
+  const hashed = await sha256Hex(nonce);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    window.google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      nonce: hashed,
+      use_fedcm_for_prompt: true,
+      cancel_on_tap_outside: false,
+      callback: (r) => finish(r?.credential ? { token: r.credential, nonce } : null),
+    });
+    window.google.accounts.id.prompt((n) => {
+      if (n.isNotDisplayed?.() || n.isSkippedMoment?.()) finish(null);
+    });
+  });
+}
+
+async function redirectSignIn(isGuest) {
   // Google returns to the bare app URL; App.jsx restores this hash afterwards.
   const redirectTo = window.location.origin + window.location.pathname;
   try {
@@ -207,12 +244,33 @@ export async function signInWithGoogle() {
   } catch {
     /* optional: user lands on Home instead */
   }
-  if (session?.user?.is_anonymous) {
+  if (isGuest) {
     const { error } = await supabase.auth.linkIdentity({ provider: 'google', options: { redirectTo } });
     if (!error) return;
     if (!/already|exists|linked/i.test(error.message)) throw new Error(error.message);
   }
   const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Google sign-in. A guest is upgraded in place (same user id, so their boards stay
+ * theirs). If that Google account already exists, we sign in to it instead.
+ * Uses Google's in-page prompt when VITE_GOOGLE_CLIENT_ID is set, else a redirect.
+ */
+export async function signInWithGoogle() {
+  needCloud();
+  const session = await ensureSession();
+  const isGuest = !!session?.user?.is_anonymous;
+  const id = await googleIdToken().catch(() => null);
+  if (!id) return redirectSignIn(isGuest);
+  const creds = { provider: 'google', token: id.token, nonce: id.nonce };
+  if (isGuest) {
+    const { error } = await supabase.auth.linkIdentity(creds);
+    if (!error) return;
+    if (!/already|exists|linked/i.test(error.message)) throw new Error(error.message);
+  }
+  const { error } = await supabase.auth.signInWithIdToken(creds);
   if (error) throw new Error(error.message);
 }
 
