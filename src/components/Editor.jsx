@@ -1,3 +1,4 @@
+import { timeAgo } from '../lib/time.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
@@ -82,18 +83,17 @@ const SHORTCUTS = [
 
 let clipboard = []; // shared across boards in this tab
 
-function relTime(iso) {
-  if (!iso) return '';
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 10) return 'just now';
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  return new Date(iso).toLocaleString();
-}
+const relTime = timeAgo;
 
 export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
+  // Re-render every 30s so "Saved 4 minutes ago" keeps counting up.
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setClock((c) => c + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
   const [title, setTitle] = useState('Untitled sketch');
   const [shapes, setShapes] = useState([]);
   const [past, setPast] = useState([]);

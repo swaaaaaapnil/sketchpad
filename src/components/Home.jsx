@@ -1,3 +1,4 @@
+import { timeAgo } from '../lib/time.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
@@ -8,13 +9,7 @@ import { backendName, createBoard, deleteBoard, duplicateBoard, listBoards } fro
 
 gsap.registerPlugin(useGSAP);
 
-function ago(iso) {
-  const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
+const ago = timeAgo;
 
 function Thumb({ shapes, dark }) {
   const b = contentBounds(shapes);
