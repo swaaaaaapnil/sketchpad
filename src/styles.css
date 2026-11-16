@@ -203,6 +203,8 @@ kbd {
   padding: 0 12px;
   font-size: 14px;
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 
@@ -852,7 +854,9 @@ kbd {
 
 /* share panel */
 .share-btn { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
-.share-btn:hover { filter: brightness(1.06); }
+.share-btn:hover,
+.share-btn:active,
+.share-btn[aria-expanded="true"] { background: var(--accent); color: var(--accent-ink); filter: brightness(1.08); }
 .share-panel {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: 30;
   width: min(340px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px 18px 14px;
