@@ -33,7 +33,7 @@ export const STEPS = [
   { sel: '[aria-label="History"]', title: 'Undo and redo', body: `${mod}Z undoes, ${mod}⇧Z redoes. Other people's edits are never undone by yours.` },
   { sel: '.presence', title: 'Who is here', body: 'People viewing this sketch right now. Their cursors show up live on the canvas.' },
   { sel: '[aria-label="Export"]', title: 'Export', body: 'Save as PNG, SVG or JSON, copy as an image, import a JSON file, or clear the canvas.' },
-  { sel: '[aria-label="Share sketch"]', title: 'Share', body: 'Invite people to edit with you, turn on a view-only link, or copy an embed snippet.' },
+  { sel: '.share-btn', title: 'Share', body: 'Invite people to edit with you, turn on a view-only link, or copy an embed snippet.' },
   { sel: '[aria-label="Draw with AI"]', title: 'Draw with AI', body: 'Describe a diagram in plain words and it is drawn for you, already connected.' },
   { sel: '[aria-label="Toggle dark mode"]', title: 'Dark mode', body: 'Switch between light and dark themes.' },
   { sel: '[aria-label="Keyboard shortcuts"]', title: 'Shortcuts', body: 'See every keyboard shortcut. Press ? to open it anytime.' },
@@ -49,7 +49,7 @@ function writeSeen(v) {
 }
 
 const visible = (el) => {
-  if (!el) return null;
+  if (!el || el.closest('[aria-hidden="true"],[inert]')) return null;
   const r = el.getBoundingClientRect();
   return r.width && r.height ? r : null;
 };
