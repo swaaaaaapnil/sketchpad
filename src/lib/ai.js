@@ -1,4 +1,5 @@
 import { generateViaSupabase, supabase } from './store.js';
+import { connectorPoints, curveMid } from './geometry.js';
 import { SYSTEM_PROMPT, WORKFLOW_SCHEMA, buildUserPrompt, normalizeWorkflow } from './aiPrompt.js';
 
 
@@ -212,16 +213,44 @@ export function layoutGraph({ nodes: rawNodes, edges: rawEdges, direction }) {
   for (const n of nodes) {
     shapes.push({ id: `label-${n.id}`, type: 'text', text: n.text, fontSize: FS, stroke: 'auto', fill: 'none', x: n.x + (n.w - n.tw) / 2, y: n.y + (n.h - n.th) / 2 });
   }
+  // How many other boxes a connector's path passes through (with a little padding).
+  const PAD = 14;
+  const hits = (line, skip) => {
+    const pts = connectorPoints({ ...line, bend: line.bend || 0.001 }, 32).slice(3, -3); // tiny bend = sampled straight line
+    let n = 0;
+    for (const o of nodes) {
+      if (skip.includes(o)) continue;
+      if (pts.some(([px, py]) => px > o.x - PAD && px < o.x + o.w + PAD && py > o.y - PAD && py < o.y + o.h + PAD)) n++;
+    }
+    return n;
+  };
   edges.forEach((e, i) => {
     const a = byId.get(e.from), b = byId.get(e.to);
     const ax = a.x + a.w / 2, ay = a.y + a.h / 2, bx = b.x + b.w / 2, by = b.y + b.h / 2;
     const arrow = { id: `edge-${i}`, type: 'arrow', x: ax, y: ay, x2: bx, y2: by, stroke: 'auto', fill: 'none', startBind: `node-${a.id}`, endBind: `node-${b.id}` };
-    // back edges and same-layer edges curve so they don't cut through nodes
-    if (back.has(e) || layer.get(e.from) === layer.get(e.to)) arrow.bend = Math.min(160, 40 + Math.hypot(bx - ax, by - ay) * 0.25);
+    // Back edges and same-layer edges always curve; any other edge curves only
+    // when its straight path would cut through another box. Pick the gentlest
+    // bend (either side) that clears the most boxes.
+    const dist = Math.hypot(bx - ax, by - ay);
+    const forced = back.has(e) || layer.get(e.from) === layer.get(e.to);
+    const skip = [a, b];
+    let best = forced ? null : { bend: 0, n: hits(arrow, skip) };
+    if (!best || best.n > 0) {
+      const base = forced ? Math.min(160, 40 + dist * 0.25) : 50;
+      for (const mag of [base, base + 40, base + 80, base + 130, base + 190]) {
+        for (const sign of [1, -1]) {
+          const n = hits({ ...arrow, bend: sign * mag }, skip);
+          if (!best || n < best.n) best = { bend: sign * mag, n };
+        }
+        if (best.n === 0) break;
+      }
+    }
+    if (best.bend) arrow.bend = best.bend;
     shapes.push(arrow);
     if (e.label) {
       const tw = e.label.length * charW(16);
-      shapes.push({ id: `elabel-${i}`, type: 'text', text: e.label, fontSize: 16, stroke: 'auto', fill: 'none', x: (ax + bx) / 2 + (right ? -tw / 2 : 8), y: (ay + by) / 2 + (right ? -22 : -10) });
+      const m = curveMid(arrow);
+      shapes.push({ id: `elabel-${i}`, type: 'text', text: e.label, fontSize: 16, stroke: 'auto', fill: 'none', x: m.x + (right ? -tw / 2 : 8), y: m.y + (right ? -22 : -10) });
     }
   });
   return shapes;
