@@ -97,7 +97,7 @@ let clipboard = []; // shared across boards in this tab
 
 const relTime = timeAgo;
 
-export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
+export default function Editor({ boardId, joinToken, dark, setDark, onHome, embed = false }) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [signInOpen, setSignInOpen] = useState(false);
@@ -123,6 +123,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [thread, setThread] = useState(null); // shape id whose comments are open
+  const [draftComment, setDraftComment] = useState('');
   const [boardList, setBoardList] = useState([]);
   const [exportOpen, setExportOpen] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -637,6 +639,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       it('Arrange', 'Distribute horizontally', () => align('h')),
       it('Arrange', 'Distribute vertically', () => align('v')),
       it('AI', 'Generate diagram with AI', () => setAiOpen(true)),
+      ...(single && !isConnector(single) ? [it('Comment', 'Comment on selection', () => setThread(single.id), 'C', 'note discuss')] : []),
     ];
     return [
       ...edit,
@@ -1315,6 +1318,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
         return align(e.code === 'KeyH' ? 'h' : 'v');
       }
       if (e.key === '?') return setHelpOpen((o) => !o);
+      if (k === 'c' && !mod && single && !isConnector(single)) return setThread(single.id);
       if (e.key === ']') return reorder(true);
       if (e.key === '[') return reorder(false);
       if (KEY_TOOLS[k]) {
@@ -1377,7 +1381,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const reconnecting = canShare && account && together && liveState === 'offline';
 
   return (
-    <div className="app" ref={rootRef}>
+    <div className={`app ${embed ? 'is-embed' : ''}`} ref={rootRef}>
       <header className="topbar">
         <div className="brand">
           <button className="icon-btn back-btn" onClick={goHome} aria-label="All sketches" title="All sketches">←</button>
@@ -1457,6 +1461,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
                           onClick={() => toggleLink(r)}
                         ><i /></button>
                         {share[r] && <button className="sp-copy" onClick={() => copyLink(shareUrl(boardId, share[r]))}>Copy</button>}
+                        {share[r] && r === 'view' && <button className="sp-copy" title="Copy an iframe snippet to embed this sketch, view only" onClick={() => copyLink(`<iframe src="${shareUrl(boardId, share[r])}&embed=1" width="800" height="500" style="border:0;border-radius:12px" loading="lazy" title="Sketch"></iframe>`)}>Embed</button>}
                       </div>
                     ))}
                     {share.state === 'error' && <p className="sp-note is-error">{share.message}</p>}
@@ -1707,6 +1712,59 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           <kbd>Space</kbd> pan · <kbd>Shift</kbd> multi-select · <kbd>?</kbd> all shortcuts
         </footer>
 
+        {shapes.filter((s) => s.comments?.length).map((s) => {
+          const b = getBounds(s);
+          return (
+            <button key={`c${s.id}`} className="comment-pin" style={{ left: cam.x + (b.x + b.w) * z - 6, top: cam.y + b.y * z - 18 }} onClick={() => setThread(thread === s.id ? null : s.id)} title="Comments">
+              💬 {s.comments.length}
+            </button>
+          );
+        })}
+        {(() => {
+          const s = thread && shapes.find((x) => x.id === thread);
+          if (!s) return null;
+          const b = getBounds(s);
+          const add = () => {
+            const text = draftComment.trim();
+            if (!text) return;
+            const c = { id: makeId(), text, author: account?.name || 'Guest', by: account?.id || null, at: Date.now() };
+            commit(shapes, shapes.map((x) => (x.id === s.id ? { ...x, comments: [...(x.comments || []), c] } : x)));
+            setDraftComment('');
+          };
+          const remove = (cid) => commit(shapes, shapes.map((x) => {
+            if (x.id !== s.id) return x;
+            const rest = (x.comments || []).filter((c) => c.id !== cid);
+            const { comments: _c, ...plain } = x;
+            return rest.length ? { ...x, comments: rest } : plain;
+          }));
+          return (
+            <div className="comment-thread" style={{ left: cam.x + (b.x + b.w) * z + 12, top: cam.y + b.y * z }} onPointerDown={(e) => e.stopPropagation()}>
+              <header><b>Comments</b><button onClick={() => setThread(null)} aria-label="Close">✕</button></header>
+              {(s.comments || []).map((c) => (
+                <div key={c.id} className="comment">
+                  <small><b>{c.author}</b> · {timeAgo(c.at)}</small>
+                  <p>{c.text}</p>
+                  {!readOnly && (!c.by || c.by === account?.id || isOwner) && <button className="comment-del" onClick={() => remove(c.id)}>Delete</button>}
+                </div>
+              ))}
+              {!s.comments?.length && <p className="comment-empty">No comments yet</p>}
+              {!readOnly && (
+                <textarea
+                  autoFocus
+                  rows={2}
+                  placeholder="Add a comment… (Enter to post)"
+                  value={draftComment}
+                  onChange={(e) => setDraftComment(e.target.value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); add(); }
+                    if (e.key === 'Escape') setThread(null);
+                  }}
+                />
+              )}
+            </div>
+          );
+        })()}
         {paletteOpen && <CommandPalette items={paletteItems()} onClose={() => setPaletteOpen(false)} />}
         {helpOpen && (
           <div className="help-sheet" role="dialog" aria-label="Keyboard shortcuts" onClick={() => setHelpOpen(false)}>

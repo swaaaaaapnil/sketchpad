@@ -1034,3 +1034,18 @@ kbd {
 .cmdk-label { flex: 1; }
 .cmdk kbd { font-size: 11px; opacity: .6; }
 .cmdk-empty { opacity: .6; justify-content: center; cursor: default; }
+
+/* comments */
+.comment-pin { position: absolute; z-index: 5; border: 0; border-radius: 999px; padding: 2px 8px; font-size: 12px; background: var(--accent); color: #fff; cursor: pointer; box-shadow: var(--shadow); }
+.comment-thread { position: absolute; z-index: 20; width: 260px; max-height: 360px; overflow-y: auto; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 10px; font-size: 14px; }
+.comment-thread header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.comment-thread header button, .comment-del { border: 0; background: none; color: inherit; cursor: pointer; opacity: .6; }
+.comment-del { font-size: 11px; padding: 0; }
+.comment { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.comment p { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+.comment small { opacity: .7; }
+.comment-empty { opacity: .6; margin: 4px 0 8px; }
+.comment-thread textarea { width: 100%; box-sizing: border-box; margin-top: 8px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; padding: 6px 8px; resize: vertical; }
+
+/* embed: canvas only */
+.app.is-embed .topbar, .app.is-embed .tool-rail, .app.is-embed .style-panel, .app.is-embed .align-bar, .app.is-embed .view-badge, .app.is-embed .comment-pin { display: none !important; }

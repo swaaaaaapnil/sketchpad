@@ -11,8 +11,8 @@ cleanAuthUrl();
 const THEME_KEY = 'sketchpad.theme';
 
 function parseHash() {
-  const m = window.location.hash.match(/^#\/b\/([\w-]+)(?:\?k=([\w%-]+))?/);
-  return m ? { name: 'board', id: m[1], token: m[2] ? decodeURIComponent(m[2]) : null } : { name: 'home' };
+  const m = window.location.hash.match(/^#\/b\/([\w-]+)(?:\?k=([\w%-]+))?(&embed=1)?/);
+  return m ? { name: 'board', id: m[1], token: m[2] ? decodeURIComponent(m[2]) : null, embed: !!m[3] } : { name: 'home' };
 }
 
 export default function App() {
@@ -47,7 +47,7 @@ export default function App() {
   }, [route]);
 
   if (route.name === 'board') {
-    return <Editor key={route.id} boardId={route.id} joinToken={route.token} dark={dark} setDark={setDark} onHome={() => (window.location.hash = '#/')} />;
+    return <Editor key={route.id} boardId={route.id} joinToken={route.token} embed={route.embed} dark={dark} setDark={setDark} onHome={() => (window.location.hash = '#/')} />;
   }
   return <Home dark={dark} setDark={setDark} onOpen={(id) => (window.location.hash = `#/b/${id}`)} />;
 }
