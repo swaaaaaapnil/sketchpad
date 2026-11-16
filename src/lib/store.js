@@ -503,3 +503,14 @@ export function joinPresence(id, me, onPeople, onCursor) {
     },
   };
 }
+
+/** After Google sign-in, drop the one-time ?code= (or ?error=) from the address bar. */
+const AUTH_PARAMS = ['code', 'error', 'error_code', 'error_description', 'state'];
+export async function cleanAuthUrl() {
+  const q = new URLSearchParams(window.location.search);
+  if (!AUTH_PARAMS.some((k) => q.has(k))) return;
+  if (supabase) await supabase.auth.getSession().catch(() => {}); // waits for the code exchange
+  AUTH_PARAMS.forEach((k) => q.delete(k));
+  const s = q.toString();
+  window.history.replaceState(window.history.state, '', window.location.pathname + (s ? `?${s}` : '') + window.location.hash);
+}

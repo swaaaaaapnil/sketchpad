@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import Home from './components/Home.jsx';
 import Editor from './components/Editor.jsx';
-import { takeReturnHash } from './lib/store.js';
+import { takeReturnHash, cleanAuthUrl } from './lib/store.js';
 
 // Coming back from Google sign-in: go back to the board the user was on.
 const back = takeReturnHash();
 if (back && !window.location.hash.startsWith('#/b/')) window.location.hash = back;
+cleanAuthUrl();
 
 const THEME_KEY = 'sketchpad.theme';
 
