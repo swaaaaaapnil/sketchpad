@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { ShapeView } from './Shapes.jsx';
+import { snapMove } from '../lib/snap.js';
 import { ToolRail, StylePanel } from './Toolbar.jsx';
 import AIPanel from './AIPanel.jsx';
 import GoogleButton from './GoogleButton.jsx';
@@ -114,6 +115,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [selected, setSelected] = useState([]);
   const [cam, setCam] = useState({ x: 0, y: 0, z: 1 });
   const [draft, setDraft] = useState(null);
+  const [guides, setGuides] = useState([]);
   const [marquee, setMarquee] = useState(null);
   const [bindHint, setBindHint] = useState(null); // id of the shape an arrow end will snap to
   const [textEdit, setTextEdit] = useState(null);
@@ -899,10 +901,18 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     if (d.mode === 'erase') return eraseAt(p, d);
 
     if (d.mode === 'move') {
-      const dx = p.x - d.start.x;
-      const dy = p.y - d.start.y;
+      let dx = p.x - d.start.x;
+      let dy = p.y - d.start.y;
       if (!d.moved && Math.hypot(dx, dy) * cam.z < 2) return;
       d.moved = true;
+      if (!(e.metaKey || e.ctrlKey)) {
+        // Smart guides: snap to other shapes' edges/centres (hold ⌘/Ctrl to move freely).
+        const others = d.before.filter((s) => !d.set.has(s.id));
+        const snap = snapMove(d.origs.filter((s) => !isConnector(s)), others, dx, dy, 6 / cam.z);
+        dx = snap.dx;
+        dy = snap.dy;
+        setGuides(snap.guides);
+      } else setGuides([]);
       const byId = new Map(d.origs.map((s) => [s.id, translateShape(s, dx, dy)]));
       d.latest = routeConnectors(detachMoved(d.before.map((s) => byId.get(s.id) ?? s), d.set));
       setShapes(d.latest);
@@ -1018,6 +1028,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     const d = drag.current;
     drag.current = null;
     setBindHint(null);
+    setGuides([]);
     if (!d) return;
 
     if (d.mode === 'move') {
@@ -1470,6 +1481,9 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
         >
           <g className="scene" transform={`translate(${cam.x} ${cam.y}) scale(${z})`}>
             {shapes.map((s) => (textEdit?.id === s.id && !textEdit.label ? null : <ShapeView key={s.id} shape={s} dark={dark} onFill={onFill.has(s.id)} hideLabel={textEdit?.id === s.id} />))}
+            {guides.map((g, i) => (
+              <line key={`g${i}`} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} stroke={g.gap ? '#e8590c' : '#f03e3e'} strokeWidth={1 / z} strokeDasharray={g.gap ? `${4 / z} ${3 / z}` : undefined} pointerEvents="none" />
+            ))}
             {draft && <ShapeView shape={draft} dark={dark} onFill={draft.type === 'pen' && draft.stroke === 'auto' && draft.points.length > 0 && pointOnFill(shapes, draft.points[0][0], draft.points[0][1])} />}
 
             {selShapes.length > 1 &&
