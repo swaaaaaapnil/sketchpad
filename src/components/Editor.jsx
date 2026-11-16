@@ -649,16 +649,14 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     const r = svgRef.current.getBoundingClientRect();
     const ox = (r.width / 2 - cam.x) / cam.z - 400;
     const oy = (r.height / 2 - cam.y) / cam.z - 300;
-    const made = list.map((s) => ({
+    const made = cloneShapes(list.map((s, i) => ({ id: s.id || `ai-${i}`, ...s }))).map((s) => ({
       ...DEFAULT_STYLE,
       ...s,
-      id: makeId(),
       seed: Math.floor(Math.random() * 100000),
       strokeWidth: 2,
       x: s.x + ox,
       y: s.y + oy,
-      x2: s.x2 + ox,
-      y2: s.y2 + oy,
+      ...(s.x2 != null ? { x2: s.x2 + ox, y2: s.y2 + oy } : {}),
     }));
     commit(shapes, [...shapes, ...made]);
     setSelected(made.map((m) => m.id));
