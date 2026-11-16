@@ -70,6 +70,7 @@ export async function generateShapes({ provider, baseUrl, apiKey, model, prompt 
       body: JSON.stringify({
         model,
         temperature: 0.4,
+        response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: SYSTEM },
           { role: 'user', content: prompt },
@@ -227,23 +228,18 @@ export function layoutGraph({ nodes: rawNodes, edges: rawEdges, direction }) {
   return shapes;
 }
 
+// Older-style replies ({shapes:[...]} with coordinates) are never drawn as-is:
+// their labels are turned into a simple top-to-bottom flow and laid out like nodes.
 function legacyShapes(parsed) {
   const list = Array.isArray(parsed.shapes) ? parsed.shapes : [];
-  const shapes = list
-    .filter((s) => ALLOWED.includes(s.type))
-    .slice(0, 25)
-    .map((s) => ({
-      type: s.type,
-      x: Number(s.x) || 0,
-      y: Number(s.y) || 0,
-      w: Number(s.w) || 120,
-      h: Number(s.h) || 60,
-      x2: Number(s.x2 ?? (Number(s.x) || 0) + 120),
-      y2: Number(s.y2 ?? (Number(s.y) || 0)),
-      text: String(s.text || ''),
-      stroke: typeof s.stroke === 'string' ? s.stroke : 'auto',
-      fill: typeof s.fill === 'string' ? s.fill : 'none',
-    }));
-  if (!shapes.length) throw new Error('The model returned no drawable shapes.');
-  return shapes;
+  const labels = list
+    .filter((s) => typeof s.text === 'string' && s.text.trim())
+    .sort((p, q) => (Number(p.y) || 0) - (Number(q.y) || 0))
+    .map((s) => s.text.trim())
+    .filter((t, i, arr) => arr.indexOf(t) === i)
+    .slice(0, 12);
+  if (!labels.length) throw new Error('The model returned no drawable shapes.');
+  const nodes = labels.map((label, i) => ({ id: `n${i}`, label, shape: 'rect', color: i === 0 ? 'blue' : i === labels.length - 1 ? 'green' : 'none' }));
+  const edges = nodes.slice(1).map((n, i) => ({ from: nodes[i].id, to: n.id }));
+  return layoutGraph({ direction: 'down', nodes, edges });
 }
