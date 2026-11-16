@@ -1049,3 +1049,23 @@ kbd {
 
 /* embed: canvas only */
 .app.is-embed .topbar, .app.is-embed .tool-rail, .app.is-embed .style-panel, .app.is-embed .align-bar, .app.is-embed .view-badge, .app.is-embed .comment-pin { display: none !important; }
+
+/* Guided tour */
+.tour-prompt { position: fixed; right: 20px; bottom: 20px; z-index: 60; width: 300px; padding: 16px 18px 14px; background: var(--surface); color: inherit; border: 1.5px solid var(--ink); border-radius: 12px; box-shadow: 4px 4px 0 var(--accent); font-size: 14px; animation: tour-in .35s cubic-bezier(.2,.8,.2,1); }
+.tour-prompt strong { font-size: 16px; }
+.tour-prompt p, .tour-tip p { margin: 6px 0 12px; line-height: 1.45; opacity: .85; }
+.tour-x { position: absolute; top: 6px; right: 8px; border: 0; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: inherit; opacity: .6; }
+.tour-x:hover { opacity: 1; }
+.tour-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.tour-actions .small { height: 32px; padding: 0 12px; }
+.tour { position: fixed; inset: 0; z-index: 70; }
+.tour-shade { position: absolute; inset: 0; }
+.tour-hole { position: fixed; border-radius: 10px; box-shadow: 0 0 0 9999px rgba(20, 14, 8, .55); outline: 2px solid var(--accent); pointer-events: none; transition: all .3s cubic-bezier(.2,.8,.2,1); }
+.tour:not(:has(.tour-hole)) .tour-shade { background: rgba(20, 14, 8, .55); }
+.tour-tip { position: fixed; width: 300px; padding: 14px 16px 12px; background: var(--surface); color: inherit; border: 1.5px solid var(--ink); border-radius: 12px; box-shadow: 4px 4px 0 var(--accent); font-size: 14px; transition: left .3s, top .3s; }
+.tour-count { font-size: 12px; opacity: .6; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+.tour .link-btn { border: 0; background: none; color: inherit; opacity: .7; cursor: pointer; font: inherit; font-size: 13px; padding: 0; }
+.tour .link-btn:hover { opacity: 1; text-decoration: underline; }
+.app.is-embed .tour-prompt { display: none; }
+@keyframes tour-in { from { opacity: 0; transform: translateY(12px); } }
+@media (max-width: 520px) { .tour-prompt, .tour-tip { width: calc(100vw - 32px); } .tour-prompt { right: 16px; bottom: 16px; } }

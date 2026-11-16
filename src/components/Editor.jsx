@@ -7,6 +7,7 @@ import { snapMove } from '../lib/snap.js';
 import { ToolRail, StylePanel } from './Toolbar.jsx';
 import AIPanel from './AIPanel.jsx';
 import CommandPalette from './CommandPalette.jsx';
+import Tour from './Tour.jsx';
 import { TEMPLATES } from '../lib/templates.js';
 import { LIBRARY, TOOLS } from './Toolbar.jsx';
 import GoogleButton from './GoogleButton.jsx';
@@ -54,7 +55,6 @@ const HIT_PX = 6;
 const HANDLE_PX = 7;
 const BIND_PX = 14; // how close (screen px) an arrow end must come to a shape to snap onto it
 const KEY_TOOLS = { v: 'select', r: 'rect', o: 'ellipse', d: 'diamond', l: 'line', a: 'arrow', p: 'pen', t: 'text', e: 'eraser', h: 'hand' };
-const STICKY = new Set(['pen', 'eraser', 'hand']); // stay active without the lock
 const HANDLE_CURSOR = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', p1: 'move', p2: 'move', mid: 'grab' };
 const ROT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M18.5 9A7 7 0 1 0 19 15" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/><path d="M18.5 9A7 7 0 1 0 19 15" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round"/><path d="M20.5 4.5v5.5h-5.5z" fill="black" stroke="white" stroke-width="1"/></svg>')}") 12 12, grab`;
 HANDLE_CURSOR.rot = ROT_CURSOR;
@@ -127,6 +127,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
   const [draftComment, setDraftComment] = useState('');
   const [boardList, setBoardList] = useState([]);
   const [exportOpen, setExportOpen] = useState(false);
+  const [tourGo, setTourGo] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [hoverCursor, setHoverCursor] = useState(null);
   const [rotView, setRotView] = useState(null); // live angle readout (and turning box) while rotating
@@ -643,6 +644,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
     ];
     return [
       ...edit,
+      it('Help', 'Take the tour', () => setTourGo(true), null, 'guide onboarding help walkthrough'),
       it('Export', 'Export PNG (2×)', () => doExport('png')),
       it('Export', 'Export SVG', () => doExport('svg')),
       it('Export', 'Copy as image', () => doExport('copy'), null, 'clipboard'),
@@ -1110,11 +1112,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
         s = { ...s, x: s.x - w / 2, y: s.y - h / 2, w, h };
       }
       if (isTrivial(s)) return;
-      commit(d.before, [...d.before, s]);
-      if (!STICKY.has(tool)) {
-        setTool('select');
-        setSelected([s.id]);
-      }
+      commit(d.before, [...d.before, s]); // the tool stays active until another is picked
     }
   }
 
@@ -1180,7 +1178,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
       commit(shapes, [...shapes, s]);
       setSelected([s.id]);
     }
-    setTool('select');
   }
 
   /* ---------- style ---------- */
@@ -1472,7 +1469,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
             )}
           </div>
           <div className="menu-wrap">
-            <button className="ghost-btn" onClick={() => setExportOpen((o) => !o)} aria-expanded={exportOpen}>Export</button>
+            <button className="ghost-btn" onClick={() => setExportOpen((o) => !o)} aria-expanded={exportOpen} aria-label="Export">Export</button>
             {exportOpen && (
               <div className="menu" role="menu">
                 <p className="menu-note">{selShapes.length ? `Selection · ${selShapes.length} shape${selShapes.length > 1 ? 's' : ''}` : 'Whole canvas'}</p>
@@ -1765,6 +1762,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
             </div>
           );
         })()}
+        {!embed && loaded && <Tour start={tourGo} onStarted={() => setTourGo(false)} />}
         {paletteOpen && <CommandPalette items={paletteItems()} onClose={() => setPaletteOpen(false)} />}
         {helpOpen && (
           <div className="help-sheet" role="dialog" aria-label="Keyboard shortcuts" onClick={() => setHelpOpen(false)}>
