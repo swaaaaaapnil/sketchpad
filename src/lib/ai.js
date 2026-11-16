@@ -1,15 +1,6 @@
 import { generateViaSupabase, supabase } from './store.js';
+import { SYSTEM_PROMPT, WORKFLOW_SCHEMA, buildUserPrompt, normalizeWorkflow } from './aiPrompt.js';
 
-const SYSTEM = `You plan diagrams for a hand-drawn whiteboard app. Reply ONLY with JSON in this exact shape:
-{"direction":"down","nodes":[{"id":"n1","label":"Landing page","shape":"rect","color":"blue"}],"edges":[{"from":"n1","to":"n2","label":""}]}
-Rules:
-- nodes are the boxes. Keep labels short (1-4 words). Use at most 16 nodes.
-- shape: "rect" for steps/screens/services, "diamond" for yes/no decisions, "ellipse" for start/end.
-- color: one of "none","yellow","green","blue","red","purple". Use colour to group related nodes, e.g. green for success, red for errors.
-- edges connect node ids in the order things happen. Label decision branches ("yes"/"no"); leave other labels empty.
-- direction: "down" for flows and processes, "right" for pipelines and timelines.
-- Never nest nodes inside each other and never give coordinates; the app lays everything out.
-No prose, no markdown.`;
 
 const ALLOWED = ['rect', 'ellipse', 'diamond', 'line', 'arrow', 'text'];
 const NODE_SHAPES = ['rect', 'ellipse', 'diamond'];
@@ -39,10 +30,11 @@ async function readError(res) {
 }
 
 export async function generateShapes({ provider, baseUrl, apiKey, model, prompt }) {
-  let text;
-  if (provider === 'supabase') {
-    text = await generateViaSupabase(prompt);
-  } else if (provider === 'anthropic') {
+  if (provider === 'supabase') return parseShapes(await generateViaSupabase(prompt));
+  const user = buildUserPrompt(prompt);
+
+  if (provider === 'anthropic') {
+    // Forced tool call: Claude must fill the workflow schema, no free text.
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -54,34 +46,41 @@ export async function generateShapes({ provider, baseUrl, apiKey, model, prompt 
       body: JSON.stringify({
         model,
         max_tokens: 2000,
-        system: SYSTEM,
-        messages: [{ role: 'user', content: prompt }],
+        system: SYSTEM_PROMPT,
+        tools: [{ name: 'draw_workflow', description: 'Draw the workflow diagram on the canvas.', input_schema: WORKFLOW_SCHEMA }],
+        tool_choice: { type: 'tool', name: 'draw_workflow' },
+        messages: [{ role: 'user', content: user }],
       }),
     });
     if (!res.ok) throw new Error(await readError(res));
     const data = await res.json();
-    text = (data.content || []).map((c) => c.text || '').join('');
-  } else {
-    const headers = { 'content-type': 'application/json' };
-    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        temperature: 0.4,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: SYSTEM },
-          { role: 'user', content: prompt },
-        ],
-      }),
-    });
-    if (!res.ok) throw new Error(await readError(res));
-    const data = await res.json();
-    text = data.choices?.[0]?.message?.content || '';
+    const call = (data.content || []).find((c) => c.type === 'tool_use');
+    if (call?.input) return layoutGraph(normalizeWorkflow(call.input));
+    return parseShapes((data.content || []).map((c) => c.text || '').join(''));
   }
-  return parseShapes(text);
+
+  // OpenAI-compatible: strict JSON schema; fall back to plain JSON mode for
+  // compatible servers that don't support structured outputs.
+  const headers = { 'content-type': 'application/json' };
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+  const call = (response_format) => fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: 0.3,
+      response_format,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: user },
+      ],
+    }),
+  });
+  let res = await call({ type: 'json_schema', json_schema: { name: 'workflow', strict: true, schema: WORKFLOW_SCHEMA } });
+  if (res.status === 400) res = await call({ type: 'json_object' });
+  if (!res.ok) throw new Error(await readError(res));
+  const data = await res.json();
+  return parseShapes(data.choices?.[0]?.message?.content || '');
 }
 
 function extractJSON(text) {
@@ -97,7 +96,7 @@ function extractJSON(text) {
 
 export function parseShapes(text) {
   const parsed = extractJSON(text);
-  if (Array.isArray(parsed.nodes)) return layoutGraph(parsed);
+  if (Array.isArray(parsed.nodes)) return layoutGraph(normalizeWorkflow(parsed));
   return legacyShapes(parsed);
 }
 
