@@ -1022,3 +1022,15 @@ kbd {
 .shape-grid button small { font-size: 10px; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .shape-grid button:hover, .shape-grid button.is-active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .shape-empty { grid-column: 1 / -1; text-align: center; opacity: .6; font-size: 13px; margin: 8px 0; }
+
+/* command palette */
+.cmdk-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 100; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 0; }
+.cmdk { width: min(560px, 100%); background: var(--surface); color: var(--ink); border-radius: 14px; box-shadow: var(--shadow); border: 1px solid var(--line); overflow: hidden; }
+.cmdk input { width: 100%; box-sizing: border-box; border: 0; border-bottom: 1px solid var(--line); padding: 14px 16px; font: inherit; font-size: 16px; background: transparent; color: var(--ink); outline: none; }
+.cmdk ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
+.cmdk li { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.cmdk li.is-on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cmdk-group { font-size: 11px; opacity: .55; width: 72px; flex-shrink: 0; text-transform: uppercase; letter-spacing: .04em; }
+.cmdk-label { flex: 1; }
+.cmdk kbd { font-size: 11px; opacity: .6; }
+.cmdk-empty { opacity: .6; justify-content: center; cursor: default; }

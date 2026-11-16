@@ -6,6 +6,9 @@ import { ShapeView } from './Shapes.jsx';
 import { snapMove } from '../lib/snap.js';
 import { ToolRail, StylePanel } from './Toolbar.jsx';
 import AIPanel from './AIPanel.jsx';
+import CommandPalette from './CommandPalette.jsx';
+import { TEMPLATES } from '../lib/templates.js';
+import { LIBRARY, TOOLS } from './Toolbar.jsx';
 import GoogleButton from './GoogleButton.jsx';
 import {
   DEFAULT_STYLE,
@@ -40,7 +43,7 @@ import {
   labelBox,
 } from '../lib/geometry.js';
 import { copyPNG, exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
-import { backendName, boardVersion, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinLive, joinPresence, myRole, onAccountChange, saveChanges, shareUrl, signInWithGoogle, signOut } from '../lib/store.js';
+import { listBoards, backendName, boardVersion, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinLive, joinPresence, myRole, onAccountChange, saveChanges, shareUrl, signInWithGoogle, signOut } from '../lib/store.js';
 import { addOps, applyOps, chunkOps, diffShapes, emptyOps, hasOps, opsToWire, orderKey, rebaseSnapshot, restoreOps } from '../lib/live.js';
 
 import Avatar, { ringFor } from './Avatar.jsx';
@@ -119,6 +122,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [textEdit, setTextEdit] = useState(null);
   const [aiOpen, setAiOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [boardList, setBoardList] = useState([]);
   const [exportOpen, setExportOpen] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [hoverCursor, setHoverCursor] = useState(null);
@@ -607,6 +612,52 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     commit(shapes, rotateShapes(shapes, ids, dir));
     say(selected.length ? 'Rotated selection' : 'Rotated sketch');
   }
+
+  function paletteItems() {
+    const it = (group, label, run, hint, keywords) => ({ id: `${group}:${label}`, group, label, run, hint, keywords });
+    const edit = readOnly ? [] : [
+      ...TOOLS.map((t) => it('Tool', t.label, () => setTool(t.id), t.key)),
+      ...LIBRARY.filter((l) => !TOOLS.some((t) => t.id === l.id)).map((l) => it('Shape', l.label, () => setTool(l.id), null, l.tags)),
+      ...TEMPLATES.map((t) => it('Template', t.name, () => addAIShapes(t.shapes()), null, 'starter board')),
+      it('Edit', 'Undo', undo, '⌘Z'),
+      it('Edit', 'Redo', redo, '⇧⌘Z'),
+      it('Edit', 'Select all', () => { setTool('select'); setSelected(shapes.map((s) => s.id)); }, '⌘A'),
+      it('Edit', 'Duplicate selection', () => pasteShapes(selShapes), '⌘D'),
+      it('Edit', 'Delete selection', deleteSelected, '⌫'),
+      it('Edit', 'Group selection', group, 'G'),
+      it('Edit', 'Ungroup', ungroup, '⇧G'),
+      it('Edit', 'Bring to front', () => reorder(true), ']'),
+      it('Edit', 'Send to back', () => reorder(false), '['),
+      it('Arrange', 'Align left', () => align('left'), null, 'arrange'),
+      it('Arrange', 'Align centre', () => align('hcenter'), null, 'center'),
+      it('Arrange', 'Align right', () => align('right')),
+      it('Arrange', 'Align top', () => align('top')),
+      it('Arrange', 'Align middle', () => align('vcenter')),
+      it('Arrange', 'Align bottom', () => align('bottom')),
+      it('Arrange', 'Distribute horizontally', () => align('h')),
+      it('Arrange', 'Distribute vertically', () => align('v')),
+      it('AI', 'Generate diagram with AI', () => setAiOpen(true)),
+    ];
+    return [
+      ...edit,
+      it('Export', 'Export PNG (2×)', () => doExport('png')),
+      it('Export', 'Export SVG', () => doExport('svg')),
+      it('Export', 'Copy as image', () => doExport('copy'), null, 'clipboard'),
+      it('Export', 'Export JSON', () => doExport('json')),
+      it('View', 'Zoom to fit', fitView, '0'),
+      it('View', 'Zoom in', () => zoomBy(1.2), '+'),
+      it('View', 'Zoom out', () => zoomBy(1 / 1.2), '−'),
+      it('View', dark ? 'Light theme' : 'Dark theme', () => setDark((d) => !d), null, 'theme mode'),
+      it('View', 'Keyboard shortcuts', () => setHelpOpen(true), '?'),
+      ...(canShare && !readOnly ? [it('Share', 'Share board', openShare, null, 'link invite embed')] : []),
+      it('Board', 'All boards', onHome, null, 'home'),
+      ...boardList.filter((b) => b.id !== boardId).map((b) => it('Board', b.title || 'Untitled', () => (window.location.hash = `#/b/${b.id}`), null, 'open')),
+    ];
+  }
+
+  useEffect(() => {
+    if (paletteOpen) listBoards().then((l) => setBoardList(l || []), () => {});
+  }, [paletteOpen]);
 
   function align(how) {
     const next = alignShapes(shapes, selSet, how);
@@ -1154,7 +1205,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       y: s.y + oy,
       ...(s.x2 != null ? { x2: s.x2 + ox, y2: s.y2 + oy } : {}),
     }));
-    commit(shapes, [...shapes, ...made]);
+    commit(shapes, routeConnectors([...shapes, ...made]));
     setSelected(made.map((m) => m.id));
     setTool('select');
     setAiOpen(false);
@@ -1202,6 +1253,10 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       if (e.code === 'KeyG' && !e.altKey) {
         e.preventDefault(); // G or ⌘G groups, Shift+G or ⇧⌘G ungroups
         return e.shiftKey ? ungroup() : group();
+      }
+      if (mod && k === 'k') {
+        e.preventDefault();
+        return setPaletteOpen((o) => !o);
       }
       if (mod) {
         const actions = {
@@ -1652,6 +1707,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           <kbd>Space</kbd> pan · <kbd>Shift</kbd> multi-select · <kbd>?</kbd> all shortcuts
         </footer>
 
+        {paletteOpen && <CommandPalette items={paletteItems()} onClose={() => setPaletteOpen(false)} />}
         {helpOpen && (
           <div className="help-sheet" role="dialog" aria-label="Keyboard shortcuts" onClick={() => setHelpOpen(false)}>
             <div className="help-card" onClick={(e) => e.stopPropagation()}>
