@@ -999,3 +999,5 @@ kbd {
   transition: opacity .14s ease-out, transform .14s ease-out, visibility 0s;
 }
 .signin-menu .gsi-btn, .share-panel .gsi-btn { height: 44px; overflow: hidden; }
+
+.align-bar .text-btn { width: auto; padding: 0 10px; font-size: 13px; }

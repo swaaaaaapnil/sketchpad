@@ -157,9 +157,9 @@ function nearPolyline(pts, x, y, tol, closed) {
 }
 
 /** True when (x, y) touches the shape: its outline, or its inside when filled or text. */
-export function shapeContains(s, x, y, tol) {
+export function shapeContains(s, x, y, tol, inside = false) {
   if (angleOf(s)) ({ x, y } = toLocal(s, { x, y }));
-  const filled = s.fill && s.fill !== 'none';
+  const filled = inside || (s.fill && s.fill !== 'none');
   const t = tol + (s.strokeWidth || 2) / 2;
   switch (s.type) {
     case 'line':
@@ -197,10 +197,18 @@ export function shapeContains(s, x, y, tol) {
   }
 }
 
-/** Topmost shape under the point. */
-export function hitTest(shapes, x, y, tol) {
+/**
+ * Topmost shape under the point. With { select: true } (clicks with the select tool),
+ * locked shapes can be picked (so they can be unlocked), and clicking inside an
+ * unfilled box/ellipse picks it when nothing drawn on top of it was hit.
+ */
+export function hitTest(shapes, x, y, tol, { select = false } = {}) {
   for (let i = shapes.length - 1; i >= 0; i--) {
-    if (!shapes[i].locked && shapeContains(shapes[i], x, y, tol)) return shapes[i];
+    if ((select || !shapes[i].locked) && shapeContains(shapes[i], x, y, tol)) return shapes[i];
+  }
+  if (!select) return null;
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    if (shapeContains(shapes[i], x, y, tol, true)) return shapes[i];
   }
   return null;
 }

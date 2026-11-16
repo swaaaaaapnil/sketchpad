@@ -524,9 +524,11 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
   const selSet = new Set(selected);
   const selShapes = shapes.filter((s) => selSet.has(s.id));
+  const selLocked = selShapes.some((s) => s.locked);
 
   function deleteSelected() {
     if (!selected.length) return;
+    if (selShapes.some((s) => s.locked)) return say('Unlock it first (🔓 or Shift+L)');
     commit(shapes, shapes.filter((s) => !selSet.has(s.id)));
     say(selected.length > 1 ? `Deleted ${selected.length} shapes` : 'Deleted');
     setSelected([]);
@@ -558,7 +560,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   }
 
   function nudge(dx, dy) {
-    if (!selected.length) return;
+    if (!selected.length || selLocked) return;
     commit(shapes, detachMoved(shapes.map((s) => (selSet.has(s.id) ? translateShape(s, dx, dy) : s)), selSet));
   }
 
@@ -593,9 +595,16 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
   function toggleLock() {
     if (!selected.length) return say('Select shapes to lock');
+    if (selLocked) {
+      commit(shapes, shapes.map((s) => {
+        if (!selSet.has(s.id) || !s.locked) return s;
+        const { locked: _drop, ...rest } = s;
+        return rest;
+      }));
+      return say('Unlocked');
+    }
     commit(shapes, shapes.map((s) => (selSet.has(s.id) ? { ...s, locked: true } : s)));
-    setSelected([]);
-    say(`Locked ${selected.length} shape${selected.length > 1 ? 's' : ''} · Shift+Alt+L unlocks all`);
+    say(`Locked ${selected.length} shape${selected.length > 1 ? 's' : ''} · click it and press 🔓 to unlock`);
   }
 
   function unlockAll() {
@@ -739,7 +748,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const frameC = frame && { x: frame.box.x + frame.box.w / 2, y: frame.box.y + frame.box.h / 2 };
 
   function handlePoints() {
-    if (!selBox || tool !== 'select' || textEdit) return [];
+    if (!selBox || tool !== 'select' || textEdit || selLocked) return [];
     if (isLine) {
       const m = curveMid(single);
       return [['p1', single.x, single.y], ['p2', single.x2, single.y2], ['mid', m.x, m.y]];
@@ -816,7 +825,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
         return capture(e);
       }
 
-      const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z);
+      const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z, { select: true });
       if (hit) {
         let ids;
         const hitIds = withGroups(shapes, [hit.id]); // clicking a grouped shape picks the whole group
@@ -828,6 +837,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           ids = selSet.has(hit.id) ? selected : hitIds;
           setSelected(ids);
         }
+        if (shapes.some((s) => ids.includes(s.id) && s.locked)) return; // locked: select only, no dragging
         let before = shapes;
         let moveIds = ids;
         if (e.altKey) {
@@ -884,7 +894,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       if (tool === 'select' && !spaceHeld) {
         const p = toWorld(e);
         const h = handleAt(p);
-        setHoverCursor(h ? handleCursor(h, frame?.a) : hitTest(shapes, p.x, p.y, HIT_PX / cam.z) ? 'move' : null);
+        setHoverCursor(h ? handleCursor(h, frame?.a) : hitTest(shapes, p.x, p.y, HIT_PX / cam.z, { select: true }) ? 'move' : null);
       }
       return;
     }
@@ -1575,12 +1585,18 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
         {!readOnly && tool !== 'hand' && tool !== 'eraser' && <StylePanel style={shownStyle} onStyle={applyStyle} />}
 
-        {!readOnly && selShapes.filter((x) => !isConnector(x)).length > 1 && (
-          <div className="align-bar" role="group" aria-label="Align">
-            {[['left', '⇤', 'Align left (Alt+A)'], ['hcenter', '↔', 'Align centers (Alt+H)'], ['right', '⇥', 'Align right (Alt+D)'], ['top', '⤒', 'Align top (Alt+W)'], ['vcenter', '↕', 'Align middles (Alt+V)'], ['bottom', '⤓', 'Align bottom (Alt+S)'], ['h', '⋯', 'Distribute horizontally (Shift+Alt+H)'], ['v', '⋮', 'Distribute vertically (Shift+Alt+V)']].map(([how, icon, label]) => (
+        {!readOnly && selShapes.length > 0 && tool === 'select' && !textEdit && (
+          <div className="align-bar" role="group" aria-label="Selection">
+            {!selLocked && selShapes.filter((x) => !isConnector(x)).length > 1 && [['left', '⇤', 'Align left (Alt+A)'], ['hcenter', '↔', 'Align centers (Alt+H)'], ['right', '⇥', 'Align right (Alt+D)'], ['top', '⤒', 'Align top (Alt+W)'], ['vcenter', '↕', 'Align middles (Alt+V)'], ['bottom', '⤓', 'Align bottom (Alt+S)'], ['h', '⋯', 'Distribute horizontally (Shift+Alt+H)'], ['v', '⋮', 'Distribute vertically (Shift+Alt+V)']].map(([how, icon, label]) => (
               <button key={how} onClick={() => align(how)} title={label} aria-label={label}>{icon}</button>
             ))}
-            <button onClick={toggleLock} title="Lock selection (Shift+L)" aria-label="Lock selection">🔒</button>
+            {!selLocked && selected.length > 1 && !(selShapes[0].groupId && selShapes.every((s) => s.groupId === selShapes[0].groupId)) && (
+              <button onClick={group} title="Group (G or ⌘G)" aria-label="Group selection" className="text-btn">Group</button>
+            )}
+            {!selLocked && selShapes.some((s) => s.groupId) && (
+              <button onClick={ungroup} title="Ungroup (Shift+G)" aria-label="Ungroup selection" className="text-btn">Ungroup</button>
+            )}
+            <button onClick={toggleLock} title={selLocked ? 'Unlock (Shift+L)' : 'Lock (Shift+L)'} aria-label={selLocked ? 'Unlock selection' : 'Lock selection'}>{selLocked ? '🔓' : '🔒'}</button>
           </div>
         )}
 
