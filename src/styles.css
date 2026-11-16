@@ -372,6 +372,8 @@ kbd {
   background: none;
   font-size: 16px;
 }
+.rotate-bar { right: 152px; }
+.rotate-bar button + button { border-left: 1px solid var(--line); }
 .zoom-bar button:hover { background: var(--surface-2); }
 .zoom-bar .zoom-level {
   min-width: 58px;

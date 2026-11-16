@@ -21,10 +21,12 @@ import {
   pointOnFill,
   LIGHT_INK,
   resizeBox,
+  rotateShapes,
   routeConnectors,
   scaleShape,
   shapesInRect,
   translateShape,
+  withGroups,
 } from '../lib/geometry.js';
 import { exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
 import { backendName, getBoard, saveBoard } from '../lib/store.js';
@@ -48,6 +50,8 @@ const SHORTCUTS = [
   ['Copy · Cut · Paste', '⌘C · ⌘X · ⌘V'],
   ['Duplicate', '⌘D · Alt + drag'],
   ['Nudge', 'Arrows (Shift = 10px)'],
+  ['Rotate 90° (selection or whole sketch)', 'Shift + R · Shift + Alt + R'],
+  ['Group · Ungroup', 'G · Shift + G (or ⌘G · ⇧⌘G)'],
   ['Bring to front · back', '] · ['],
   ['Edit text', 'Double-click'],
   ['Keep proportions', 'Shift while resizing'],
@@ -262,6 +266,30 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     commit(shapes, detachMoved(shapes.map((s) => (selSet.has(s.id) ? translateShape(s, dx, dy) : s)), selSet));
   }
 
+  function group() {
+    if (selected.length < 2) return say('Select two or more shapes to group');
+    const groupId = makeId();
+    commit(shapes, shapes.map((s) => (selSet.has(s.id) ? { ...s, groupId } : s)));
+    say(`Grouped ${selected.length} shapes`);
+  }
+
+  function ungroup() {
+    if (!selShapes.some((s) => s.groupId)) return;
+    commit(shapes, shapes.map((s) => {
+      if (!selSet.has(s.id) || !s.groupId) return s;
+      const { groupId: _drop, ...rest } = s;
+      return rest;
+    }));
+    say('Ungrouped');
+  }
+
+  function rotate(dir) {
+    const ids = selected.length ? selSet : new Set(shapes.map((s) => s.id));
+    if (!ids.size) return;
+    commit(shapes, rotateShapes(shapes, ids, dir));
+    say(selected.length ? 'Rotated selection' : 'Rotated sketch');
+  }
+
   function clearAll() {
     if (!shapes.length) return;
     if (!window.confirm('Clear the whole canvas? You can undo this.')) return;
@@ -382,12 +410,13 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z);
       if (hit) {
         let ids;
+        const hitIds = withGroups(shapes, [hit.id]); // clicking a grouped shape picks the whole group
         if (e.shiftKey) {
-          ids = selSet.has(hit.id) ? selected.filter((id) => id !== hit.id) : [...selected, hit.id];
+          ids = selSet.has(hit.id) ? selected.filter((id) => !hitIds.includes(id)) : [...new Set([...selected, ...hitIds])];
           setSelected(ids);
           if (!ids.includes(hit.id)) return;
         } else {
-          ids = selSet.has(hit.id) ? selected : [hit.id];
+          ids = selSet.has(hit.id) ? selected : hitIds;
           setSelected(ids);
         }
         let before = shapes;
@@ -514,7 +543,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     if (d.mode === 'marquee') {
       const rect = { x: d.start.x, y: d.start.y, w: p.x - d.start.x, h: p.y - d.start.y };
       setMarquee(rect);
-      const inside = shapesInRect(shapes, rect);
+      const inside = withGroups(shapes, shapesInRect(shapes, rect));
       setSelected([...new Set([...d.base, ...inside])]);
       return;
     }
@@ -701,6 +730,10 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
 
+      if (e.code === 'KeyG' && !e.altKey) {
+        e.preventDefault(); // G or ⌘G groups, Shift+G or ⇧⌘G ungroups
+        return e.shiftKey ? ungroup() : group();
+      }
       if (mod) {
         const actions = {
           z: () => (e.shiftKey ? redo() : undo()),
@@ -744,6 +777,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
         return nudge(dx, dy);
       }
+      if (e.code === 'KeyR' && e.shiftKey) return rotate(e.altKey ? -1 : 1);
       if (e.key === '?') return setHelpOpen((o) => !o);
       if (e.key === ']') return reorder(true);
       if (e.key === '[') return reorder(false);
@@ -973,6 +1007,11 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         {!loaded && <div className="empty-hint"><p className="hint-title">Opening sketch…</p></div>}
 
         {tool !== 'hand' && tool !== 'eraser' && <StylePanel style={shownStyle} onStyle={applyStyle} />}
+
+        <div className="zoom-bar rotate-bar" role="group" aria-label="Rotate">
+          <button onClick={() => rotate(-1)} aria-label="Rotate 90° counter-clockwise" title={`Rotate ${selected.length ? 'selection' : 'sketch'} 90° left (Shift+Alt+R)`}>↺</button>
+          <button onClick={() => rotate(1)} aria-label="Rotate 90° clockwise" title={`Rotate ${selected.length ? 'selection' : 'sketch'} 90° right (Shift+R)`}>↻</button>
+        </div>
 
         <div className="zoom-bar" role="group" aria-label="Zoom">
           <button onClick={() => zoomBy(1 / 1.2)} aria-label="Zoom out">−</button>

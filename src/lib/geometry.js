@@ -206,6 +206,74 @@ export function translateShape(s, dx, dy) {
   return { ...s, x: s.x + dx, y: s.y + dy };
 }
 
+/**
+ * Rotates the layout of the shapes in `ids` by a quarter turn around their shared center
+ * (dir 1 = clockwise, -1 = counter-clockwise). Boxes and text keep their size and stay
+ * upright so labels remain readable; strokes and free connector ends turn with the layout,
+ * and bound arrows re-attach to their shapes.
+ */
+export function rotateShapes(shapes, ids, dir = 1) {
+  const picked = shapes.filter((s) => ids.has(s.id));
+  if (!picked.length) return shapes;
+  const b = contentBounds(picked);
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  const turn = (x, y) => (dir > 0 ? [cx - (y - cy), cy + (x - cx)] : [cx + (y - cy), cy - (x - cx)]);
+
+  // Boxes keep their size, so spacing that fit before the turn can make wide boxes collide
+  // afterwards. Work out how far to spread the layout on each axis so no two boxes overlap.
+  const GAP = 28;
+  const boxes = picked
+    .filter((s) => !isConnector(s) && s.type !== 'pen' && s.type !== 'text')
+    .map((s) => {
+      const sb = getBounds(s);
+      const [x, y] = turn(sb.x + sb.w / 2, sb.y + sb.h / 2);
+      return { x, y, w: sb.w, h: sb.h };
+    });
+  let sx = 1, sy = 1;
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const p = boxes[i], q = boxes[j];
+      const dx = Math.abs(p.x - q.x), dy = Math.abs(p.y - q.y);
+      const needX = (p.w + q.w) / 2 + GAP, needY = (p.h + q.h) / 2 + GAP;
+      if (dx >= needX || dy >= needY) continue; // already clear
+      if (dx >= dy && dx > 1) sx = Math.max(sx, needX / dx);
+      else if (dy > 1) sy = Math.max(sy, needY / dy);
+    }
+  }
+  sx = Math.min(sx, 4); sy = Math.min(sy, 4);
+  const place = (x, y) => {
+    const [tx, ty] = turn(x, y);
+    return [cx + (tx - cx) * sx, cy + (ty - cy) * sy];
+  };
+
+  const out = shapes.map((s) => {
+    if (!ids.has(s.id)) return s;
+    if (isConnector(s)) {
+      const [x, y] = place(s.x, s.y), [x2, y2] = place(s.x2, s.y2);
+      return { ...s, x, y, x2, y2 };
+    }
+    const sb = getBounds(s);
+    const ox = sb.x + sb.w / 2, oy = sb.y + sb.h / 2;
+    if (s.type === 'pen') {
+      // Strokes turn as drawn; only their position follows the spread.
+      const [nx, ny] = place(ox, oy);
+      const [rx, ry] = turn(ox, oy);
+      return { ...s, points: s.points.map(([px, py, pr]) => { const [tx, ty] = turn(px, py); return [tx + nx - rx, ty + ny - ry, pr]; }) };
+    }
+    const [nx, ny] = place(ox, oy);
+    return translateShape(s, nx - ox, ny - oy);
+  });
+  return routeConnectors(out);
+}
+
+/** `ids` plus every shape that shares a group with one of them. */
+export function withGroups(shapes, ids) {
+  const out = new Set(ids);
+  const groups = new Set(shapes.filter((s) => out.has(s.id) && s.groupId).map((s) => s.groupId));
+  if (groups.size) for (const s of shapes) if (s.groupId && groups.has(s.groupId)) out.add(s.id);
+  return [...out];
+}
+
 export function duplicateShape(s, offset = 24) {
   return translateShape(cloneShapes([s])[0], offset, offset);
 }
@@ -377,8 +445,13 @@ export function detachMoved(shapes, movedIds) {
 /** Copies of `list` with fresh ids; binds follow their target when it is copied too, otherwise they are dropped. */
 export function cloneShapes(list) {
   const ids = new Map(list.map((s) => [s.id, makeId()]));
+  const groups = new Map(); // copies form their own group, separate from the originals
   return list.map((s) => {
     const c = { ...s, id: ids.get(s.id) };
+    if (s.groupId) {
+      if (!groups.has(s.groupId)) groups.set(s.groupId, makeId());
+      c.groupId = groups.get(s.groupId);
+    }
     for (const key of ['startBind', 'endBind']) {
       if (!s[key]) continue;
       if (ids.has(s[key])) c[key] = ids.get(s[key]);
