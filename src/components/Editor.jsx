@@ -1402,6 +1402,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome, embe
 
         {readOnly ? <span className="view-badge" title="You can look and export, but not change this sketch">👁 View only</span> : <ToolRail
           tool={tool}
+          templates={TEMPLATES}
+          onTemplate={(t) => addAIShapes(t.shapes())}
           onTool={(t) => {
             setTool(t);
             if (t !== 'select') setSelected([]);

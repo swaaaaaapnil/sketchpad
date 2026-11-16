@@ -1,4 +1,12 @@
 import { useState } from 'react';
+
+// The rail can scroll sideways on narrow screens, which would clip an absolutely
+// positioned popover, so popovers are placed fixed under their button.
+const popAt = (btn) => {
+  const r = btn.getBoundingClientRect();
+  const half = 135;
+  return { position: 'fixed', top: r.bottom + 8, left: Math.max(half + 8, Math.min(r.left + r.width / 2, window.innerWidth - half - 8)) };
+};
 export const TOOLS = [
   { id: 'select', label: 'Select', key: 'V', glyph: '↖' },
   { id: 'rect', label: 'Rectangle', key: 'R', glyph: '▢' },
@@ -25,30 +33,30 @@ export const LIBRARY = [
 ];
 
 function ShapePicker({ tool, onTool }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(null);
   const [q, setQ] = useState('');
   const extra = LIBRARY.find((l) => l.id === tool && !TOOLS.some((t) => t.id === l.id));
   const items = LIBRARY.filter((l) => `${l.label} ${l.tags}`.toLowerCase().includes(q.trim().toLowerCase()));
   const pick = (id) => {
     onTool(id);
-    setOpen(false);
+    setOpen(null);
     setQ('');
   };
   return (
     <div className="shape-picker">
-      <button className={`tool-btn ${extra ? 'is-active' : ''}`} onClick={() => setOpen((o) => !o)} title="More shapes" aria-label="More shapes" aria-expanded={open}>
+      <button className={`tool-btn ${extra ? 'is-active' : ''}`} onClick={(e) => setOpen(open ? null : popAt(e.currentTarget))} title="More shapes" aria-label="More shapes" aria-expanded={!!open}>
         <span aria-hidden="true">{extra ? extra.glyph : '⬡'}</span>
         <kbd>+</kbd>
       </button>
       {open && (
-        <div className="shape-pop" role="dialog" aria-label="Shape library">
+        <div className="shape-pop" style={open} role="dialog" aria-label="Shape library">
           <input
             autoFocus
             placeholder="Search shapes…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') setOpen(false);
+              if (e.key === 'Escape') setOpen(null);
               if (e.key === 'Enter' && items[0]) pick(items[0].id);
               e.stopPropagation();
             }}
@@ -68,7 +76,29 @@ function ShapePicker({ tool, onTool }) {
   );
 }
 
-export function ToolRail({ tool, onTool }) {
+function TemplatePicker({ templates, onPick }) {
+  const [open, setOpen] = useState(null);
+  return (
+    <div className="shape-picker">
+      <button className="tool-btn" onClick={(e) => setOpen(open ? null : popAt(e.currentTarget))} title="Templates" aria-label="Templates" aria-expanded={!!open}>
+        <span aria-hidden="true">▦</span>
+      </button>
+      {open && (
+        <div className="shape-pop template-pop" style={open} role="dialog" aria-label="Templates" onKeyDown={(e) => e.key === 'Escape' && setOpen(null)}>
+          <p className="pop-title">Start from a template</p>
+          {templates.map((t) => (
+            <button key={t.id} className="template-item" onClick={() => { onPick(t); setOpen(null); }}>
+              <strong>{t.name}</strong>
+              {t.desc && <small>{t.desc}</small>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ToolRail({ tool, onTool, templates, onTemplate }) {
   return (
     <nav className="tool-rail" aria-label="Drawing tools">
       {TOOLS.map((t) => (
@@ -85,6 +115,7 @@ export function ToolRail({ tool, onTool }) {
         </button>
       ))}
       <ShapePicker tool={tool} onTool={onTool} />
+      {templates && <TemplatePicker templates={templates} onPick={onTemplate} />}
     </nav>
   );
 }

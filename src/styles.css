@@ -1069,3 +1069,12 @@ kbd {
 .app.is-embed .tour-prompt { display: none; }
 @keyframes tour-in { from { opacity: 0; transform: translateY(12px); } }
 @media (max-width: 520px) { .tour-prompt, .tour-tip { width: calc(100vw - 32px); } .tour-prompt { right: 16px; bottom: 16px; } }
+.template-pop { width: 240px; }
+.template-pop .pop-title { margin: 2px 4px 8px; font-size: 12px; opacity: .65; }
+.template-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.template-item:hover, .template-item:focus-visible { background: var(--accent-soft); }
+.template-item small { opacity: .65; font-size: 12px; }
+.tour-pill { position: fixed; right: 20px; bottom: 104px; z-index: 40; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; box-shadow: var(--shadow); animation: tour-in .35s cubic-bezier(.2,.8,.2,1); }
+.tour-pill:hover { border-color: var(--accent); color: var(--accent); }
+.home .tour-pill, .tour-pill.on-home { bottom: 20px; }
+.app.is-embed .tour-pill { display: none; }

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 
 const KEY = 'sketchpad.tour';
+const NOW = 'sketchpad.tourNow';
+
+/** Ask the next editor that opens to start the tour (used from the home page). */
+export function queueTour() {
+  try { sessionStorage.setItem(NOW, '1'); } catch { /* storage blocked */ }
+}
 const mod = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
 
 const tool = (label, body) => ({ sel: `.tool-rail [aria-label="${label}"]`, title: label, body });
@@ -15,6 +21,7 @@ export const STEPS = [
   tool('Ellipse', 'Circles and ovals. Hold Shift for a perfect circle.'),
   tool('Diamond', 'Decision shapes for flowcharts.'),
   { sel: '[aria-label="More shapes"]', title: 'Shape library', body: 'Cylinders, documents, clouds, sticky notes and more. Search by name.' },
+  { sel: '.tool-rail [aria-label="Templates"]', title: 'Templates', body: 'Start from a ready-made flowchart, user journey, system architecture or retro board. Every piece stays editable.' },
   tool('Line', 'Straight lines. Hold Shift to snap the angle.'),
   tool('Arrow', 'Start or end on a shape and the arrow stays attached when the shape moves.'),
   tool('Pen', 'Freehand drawing.'),
@@ -47,8 +54,30 @@ const visible = (el) => {
   return r.width && r.height ? r : null;
 };
 
+/**
+ * Bottom-right card inviting people to take the tour. Once dismissed it shrinks to a
+ * small pill, so the tour is always one click away, signed in or not.
+ */
+export function TourLauncher({ onStart }) {
+  const [open, setOpen] = useState(() => !readSeen());
+  const dismiss = () => { setOpen(false); writeSeen('dismissed'); };
+  if (!open) {
+    return <button className="tour-pill" onClick={onStart} aria-label="Take a tour">✦ Take a tour</button>;
+  }
+  return (
+    <aside className="tour-prompt" role="dialog" aria-label="Take a tour">
+      <button className="tour-x" aria-label="Dismiss" onClick={dismiss}>×</button>
+      <strong>New here?</strong>
+      <p>Sketchpad has tools for diagrams, sticky notes, templates, live collaboration, comments and AI drawing. Take a one-minute tour of every button and feature. No sign-in needed.</p>
+      <div className="tour-actions">
+        <button className="ghost-btn small" onClick={dismiss}>Not now</button>
+        <button className="primary-btn small" onClick={() => { writeSeen('done'); onStart(); }}>Take a Tour</button>
+      </div>
+    </aside>
+  );
+}
+
 export default function Tour({ start, onStarted }) {
-  const [prompt, setPrompt] = useState(() => !readSeen());
   const [step, setStep] = useState(-1);
   const [rect, setRect] = useState(null);
   const [steps, setSteps] = useState(STEPS);
@@ -56,14 +85,21 @@ export default function Tour({ start, onStarted }) {
   const begin = useCallback(() => {
     // Skip steps whose element is not on screen (read-only view, hidden panels).
     setSteps(STEPS.filter((s) => !s.sel || visible(document.querySelector(s.sel))));
-    setPrompt(false);
     setStep(0);
-    writeSeen('done');
   }, []);
 
   useEffect(() => {
     if (start) { begin(); onStarted?.(); }
   }, [start, begin, onStarted]);
+
+  // Started from the home page: wait for the editor's entrance animation first.
+  useEffect(() => {
+    let now = false;
+    try { now = sessionStorage.getItem(NOW) === '1'; sessionStorage.removeItem(NOW); } catch { /* storage blocked */ }
+    if (!now) return;
+    const t = setTimeout(begin, 900);
+    return () => clearTimeout(t);
+  }, [begin]);
 
   const end = useCallback(() => setStep(-1), []);
   const cur = step >= 0 ? steps[step] : null;
@@ -90,20 +126,7 @@ export default function Tour({ start, onStarted }) {
     return () => window.removeEventListener('keydown', onKey, true);
   }, [cur, steps.length, end]);
 
-  if (prompt) {
-    return (
-      <aside className="tour-prompt" role="dialog" aria-label="Take a tour">
-        <button className="tour-x" aria-label="Dismiss" onClick={() => { setPrompt(false); writeSeen('dismissed'); }}>×</button>
-        <strong>New here?</strong>
-        <p>Sketchpad has tools for diagrams, sticky notes, live collaboration, comments and AI drawing. Take a one-minute tour of every button and feature.</p>
-        <div className="tour-actions">
-          <button className="ghost-btn small" onClick={() => { setPrompt(false); writeSeen('dismissed'); }}>Not now</button>
-          <button className="primary-btn small" onClick={begin}>Take a Tour</button>
-        </div>
-      </aside>
-    );
-  }
-  if (!cur) return null;
+  if (step < 0) return <TourLauncher onStart={begin} />;
 
   const pad = 6;
   const hole = rect && { left: rect.left - pad, top: rect.top - pad, width: rect.width + pad * 2, height: rect.height + pad * 2 };

@@ -8,6 +8,7 @@ export const TEMPLATES = [
   {
     id: 'flowchart',
     name: 'Flowchart',
+    desc: 'Start, input, decision, process, save',
     shapes: () => [
       box('s', 'ellipse', 325, 0, 'Start'),
       box('i', 'parallelogram', 315, 130, 'Get input', { w: 170 }),
@@ -21,6 +22,7 @@ export const TEMPLATES = [
   {
     id: 'journey',
     name: 'User journey',
+    desc: 'Steps a person goes through',
     shapes: () => {
       const steps = ['Discover', 'Sign up', 'First use', 'Habit', 'Recommend'];
       const out = [text('t', 0, -70, 'User journey')];
@@ -35,6 +37,7 @@ export const TEMPLATES = [
   {
     id: 'architecture',
     name: 'System architecture',
+    desc: 'Clients, services and databases',
     shapes: () => [
       box('u', 'ellipse', 0, 200, 'Users'),
       box('cdn', 'cloud', 210, 180, 'CDN', { w: 170, h: 120 }),
@@ -49,6 +52,7 @@ export const TEMPLATES = [
   {
     id: 'retro',
     name: 'Retro',
+    desc: 'Went well, to improve, actions',
     shapes: () => {
       const cols = [['Went well', '#b2f2bb'], ['To improve', '#ffc9c9'], ['Action items', '#a5d8ff']];
       const out = [text('t', 0, -80, 'Sprint retro')];

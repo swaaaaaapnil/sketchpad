@@ -5,6 +5,7 @@ import { useGSAP } from '@gsap/react';
 const Hero3D = lazy(() => import('./Hero3D.jsx'));
 import { ShapeView } from './Shapes.jsx';
 import { contentBounds, onFillIds } from '../lib/geometry.js';
+import { TourLauncher, queueTour } from './Tour.jsx';
 import { backendName, canSignIn, createBoard, deleteBoard, duplicateBoard, getAccount, listBoards, onAccountChange, signInWithGoogle, signOut } from '../lib/store.js';
 import Avatar from './Avatar.jsx';
 import GoogleButton from './GoogleButton.jsx';
@@ -239,6 +240,7 @@ export default function Home({ dark, setDark, onOpen }) {
           </div>
         )}
       </section>
+      <TourLauncher onStart={() => { queueTour(); newBoard(); }} />
     </div>
   );
 }
