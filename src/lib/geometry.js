@@ -72,7 +72,9 @@ export function getBounds(s) {
  * around their center; x/y/w/h stay the unrotated box. Pen strokes and connectors
  * have no angle: rotating them moves their points.
  */
-const ANGLED = new Set(['rect', 'ellipse', 'diamond', 'text']);
+/** Box-like shapes: drawn from x/y/w/h, can carry a `label` that lives inside them. */
+export const BOX_TYPES = new Set(['rect', 'ellipse', 'diamond', 'cylinder', 'document', 'parallelogram', 'cloud', 'sticky']);
+const ANGLED = new Set([...BOX_TYPES, 'text']);
 export const angleOf = (s) => (ANGLED.has(s.type) && s.angle) || 0;
 
 /** Point p turned by angle a around c. */
@@ -359,6 +361,7 @@ export function createShape(type, p, style) {
   };
   if (type === 'line' || type === 'arrow') return { ...base, x2: p.x, y2: p.y };
   if (type === 'pen') return { ...base, points: [[p.x, p.y]] };
+  if (type === 'sticky' && (!base.fill || base.fill === 'none')) base.fill = '#ffec99';
   return base;
 }
 
@@ -384,7 +387,7 @@ export function isTrivial(s) {
 /* ---------- connectors: snapping arrows to shapes, and curved arrows ---------- */
 
 export const isConnector = (s) => s.type === 'line' || s.type === 'arrow';
-const BINDABLE = new Set(['rect', 'ellipse', 'diamond', 'text']);
+const BINDABLE = new Set([...BOX_TYPES, 'text']);
 const BIND_GAP = 6; // world px between an arrow tip and the outline it points at
 
 /** Shape an arrow end at p should snap to: the topmost box/ellipse/diamond near p (text only as a fallback). */
@@ -417,7 +420,7 @@ export function edgePoint(s, toward) {
   if (!dx && !dy) dy = -1;
   const hw = b.w / 2 + BIND_GAP, hh = b.h / 2 + BIND_GAP;
   let t;
-  if (s.type === 'ellipse') t = 1 / Math.hypot(dx / (hw || 1), dy / (hh || 1));
+  if (s.type === 'ellipse' || s.type === 'cloud') t = 1 / Math.hypot(dx / (hw || 1), dy / (hh || 1));
   else if (s.type === 'diamond') t = 1 / (Math.abs(dx) / (hw || 1) + Math.abs(dy) / (hh || 1));
   else t = Math.min(hw / (Math.abs(dx) || 1e-9), hh / (Math.abs(dy) || 1e-9));
   return { x: c.x + dx * t, y: c.y + dy * t };
@@ -558,4 +561,59 @@ export function alignShapes(shapes, ids, how) {
     }
   }
   return routeConnectors(shapes.map((s) => (moves.has(s.id) ? translateShape(s, ...moves.get(s.id)) : s)));
+}
+
+/* ---------- labels: text that lives inside a box shape ---------- */
+
+/** The area inside a box shape where its label goes (unrotated). */
+export function labelBox(s) {
+  const { x, y, w, h } = s;
+  const inset = (fx, fy) => ({ x: x + (w * (1 - fx)) / 2, y: y + (h * (1 - fy)) / 2, w: w * fx, h: h * fy });
+  switch (s.type) {
+    case 'ellipse': return inset(0.72, 0.72);
+    case 'diamond': return inset(0.52, 0.52);
+    case 'cloud': return inset(0.62, 0.6);
+    case 'parallelogram': {
+      const k = Math.min(w * 0.22, h * 0.6);
+      return { x: x + k, y: y + 6, w: Math.max(10, w - 2 * k), h: h - 12 };
+    }
+    case 'cylinder': {
+      const ry = Math.min(h * 0.15, 22);
+      return { x: x + 8, y: y + ry * 2, w: w - 16, h: Math.max(10, h - ry * 3) };
+    }
+    case 'document': {
+      const d = Math.min(h * 0.12, 14);
+      return { x: x + 8, y: y + 6, w: w - 16, h: Math.max(10, h - d * 2 - 6) };
+    }
+    default: return { x: x + 8, y: y + 6, w: Math.max(10, w - 16), h: Math.max(10, h - 12) };
+  }
+}
+
+/** Greedy word wrap using the same width estimate as free text. */
+export function wrapLabel(text, fs, maxW) {
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(/\s+/)) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && next.length * fs * 0.48 > maxW) {
+        out.push(line);
+        line = word;
+      } else line = next;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/** Lines and font size that fit a shape's label inside it. */
+export function fitLabel(s) {
+  const box = labelBox(s);
+  let fs = s.fontSize || 20;
+  let lines = wrapLabel(s.label, fs, box.w);
+  while (fs > 10 && (lines.length * fs * 1.25 > box.h || lines.some((l) => l.length * fs * 0.48 > box.w * 1.15))) {
+    fs -= 1;
+    lines = wrapLabel(s.label, fs, box.w);
+  }
+  return { box, fs, lines };
 }

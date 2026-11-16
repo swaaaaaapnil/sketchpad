@@ -397,6 +397,12 @@ kbd {
 }
 
 /* Text input */
+.text-input.is-label {
+  text-align: center;
+  min-width: 40px;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+}
 .text-input {
   position: absolute;
   min-width: 160px;
@@ -1002,3 +1008,17 @@ kbd {
 .signin-menu .gsi-btn, .share-panel .gsi-btn { height: 44px; overflow: hidden; }
 
 .align-bar .text-btn { width: auto; padding: 0 10px; font-size: 13px; }
+
+/* shape library picker */
+.shape-picker { position: relative; display: inline-flex; }
+.shape-pop {
+  position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  width: 260px; padding: 10px; background: var(--surface); border-radius: 12px;
+  box-shadow: var(--shadow); z-index: 30; border: 1px solid var(--line, rgba(0,0,0,.08));
+}
+.shape-pop input { width: 100%; box-sizing: border-box; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line, rgba(0,0,0,.12)); background: transparent; color: var(--ink); font: inherit; margin-bottom: 8px; }
+.shape-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.shape-grid button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 2px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; font-size: 20px; }
+.shape-grid button small { font-size: 10px; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.shape-grid button:hover, .shape-grid button.is-active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.shape-empty { grid-column: 1 / -1; text-align: center; opacity: .6; font-size: 13px; margin: 8px 0; }

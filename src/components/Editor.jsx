@@ -35,6 +35,8 @@ import {
   rotateShapeBy,
   normAngle,
   isConnector,
+  BOX_TYPES,
+  labelBox,
 } from '../lib/geometry.js';
 import { exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
 import { backendName, boardVersion, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinLive, joinPresence, myRole, onAccountChange, saveChanges, shareUrl, signInWithGoogle, signOut } from '../lib/store.js';
@@ -54,7 +56,7 @@ const ROT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="ht
 HANDLE_CURSOR.rot = ROT_CURSOR;
 const RESIZE_DIRS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
 const ROT_OFFSET = 26; // screen px between the selection box and the rotate handle
-const ANGLED_TYPES = new Set(['rect', 'ellipse', 'diamond', 'text']);
+const ANGLED_TYPES = new Set([...BOX_TYPES, 'text']);
 /** Resize cursor for handle h on a shape turned by angle a. */
 function handleCursor(h, a) {
   const i = RESIZE_DIRS.indexOf(h);
@@ -788,6 +790,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z);
       if (hit?.type === 'text') return startTextEdit(hit);
       e.preventDefault();
+      if (hit && BOX_TYPES.has(hit.type)) return startLabelEdit(hit);
       return startTextEdit(null, p);
     }
 
@@ -1036,8 +1039,13 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       return;
     }
     if (d.mode === 'draw') {
-      const s = d.draft;
+      let s = d.draft;
       setDraft(null);
+      if (isTrivial(s) && BOX_TYPES.has(s.type)) {
+        // A click with a shape tool drops a default-sized shape.
+        const w = s.type === 'sticky' ? 160 : 140, h = s.type === 'sticky' ? 160 : 80;
+        s = { ...s, x: s.x - w / 2, y: s.y - h / 2, w, h };
+      }
       if (isTrivial(s)) return;
       commit(d.before, [...d.before, s]);
       if (!locked && !STICKY.has(tool)) {
@@ -1057,10 +1065,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       return say('Inside group · click away to leave');
     }
     if (hit?.type === 'text') return startTextEdit(hit);
-    if (hit && ['rect', 'ellipse', 'diamond'].includes(hit.type)) {
-      // Label a box: start text near its center.
-      return startTextEdit(null, { x: hit.x + hit.w / 2 - 30, y: hit.y + hit.h / 2 - 15 });
-    }
+    if (hit && BOX_TYPES.has(hit.type)) return startLabelEdit(hit);
     startTextEdit(null, p);
   }
 
@@ -1076,12 +1081,29 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     }
   }
 
+  /** Edit the text that lives inside a box shape (moves, resizes and wraps with it). */
+  function startLabelEdit(shape) {
+    setSelected([shape.id]);
+    setTextEdit({ id: shape.id, label: true, box: labelBox(shape), x: shape.x, y: shape.y, value: shape.label || '', fontSize: shape.fontSize || 20, stroke: shape.stroke });
+  }
+
   function finishText(keep) {
     const t = textEdit;
     if (!t) return;
     setTextEdit(null);
     if (!keep) return;
     const value = t.value.replace(/\s+$/, '');
+    if (t.label) {
+      const orig = shapes.find((s) => s.id === t.id);
+      if (orig && (orig.label || '') !== value) {
+        commit(shapes, shapes.map((s) => {
+          if (s.id !== t.id) return s;
+          const { label: _drop, ...rest } = s;
+          return value ? { ...rest, label: value } : rest;
+        }));
+      }
+      return;
+    }
     if (t.id) {
       const orig = shapes.find((s) => s.id === t.id);
       if (!value) {
@@ -1447,7 +1469,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           aria-label="Drawing canvas"
         >
           <g className="scene" transform={`translate(${cam.x} ${cam.y}) scale(${z})`}>
-            {shapes.map((s) => (textEdit?.id === s.id ? null : <ShapeView key={s.id} shape={s} dark={dark} onFill={onFill.has(s.id)} />))}
+            {shapes.map((s) => (textEdit?.id === s.id && !textEdit.label ? null : <ShapeView key={s.id} shape={s} dark={dark} onFill={onFill.has(s.id)} hideLabel={textEdit?.id === s.id} />))}
             {draft && <ShapeView shape={draft} dark={dark} onFill={draft.type === 'pen' && draft.stroke === 'auto' && draft.points.length > 0 && pointOnFill(shapes, draft.points[0][0], draft.points[0][1])} />}
 
             {selShapes.length > 1 &&
@@ -1544,7 +1566,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
         {textEdit && (
           <textarea
-            className="text-input"
+            className={`text-input ${textEdit.label ? 'is-label' : ''}`}
             autoFocus
             rows={Math.max(1, textEdit.value.split('\n').length)}
             value={textEdit.value}
@@ -1561,7 +1583,13 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
               }
             }}
             onBlur={() => finishText(true)}
-            style={{
+            style={textEdit.label ? {
+              left: cam.x + textEdit.box.x * z,
+              top: cam.y + (textEdit.box.y + textEdit.box.h / 2) * z,
+              width: textEdit.box.w * z,
+              fontSize: Math.min(textEdit.fontSize, 20) * z,
+              color: 'var(--ink)',
+            } : {
               left: cam.x + textEdit.x * z,
               top: cam.y + textEdit.y * z,
               fontSize: textEdit.fontSize * z,
