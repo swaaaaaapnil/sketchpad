@@ -27,9 +27,23 @@ import {
   shapesInRect,
   translateShape,
   withGroups,
+  alignShapes,
+  isConnector,
 } from '../lib/geometry.js';
 import { exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
-import { backendName, getBoard, saveBoard } from '../lib/store.js';
+import { backendName, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinPresence, myRole, onAccountChange, saveBoard, shareUrl, signInWithGoogle, signOut, watchBoard } from '../lib/store.js';
+
+const RING = ['#e8590c', '#1971c2', '#2f9e44', '#9c36b5', '#c2255c', '#0c8599', '#f08c00'];
+const ringFor = (id = '') => RING[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % RING.length];
+const initials = (name = '?') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+
+function Avatar({ person, size = 28 }) {
+  return (
+    <span className="pv-avatar" style={{ '--ring': ringFor(person.id), width: size, height: size }} title={`${person.name}${person.you ? ' (you)' : ''} · ${person.role === 'view' ? 'viewing' : 'editing'}`}>
+      {person.avatar ? <img src={person.avatar} alt="" referrerPolicy="no-referrer" /> : initials(person.name)}
+    </span>
+  );
+}
 
 gsap.registerPlugin(useGSAP);
 
@@ -52,6 +66,10 @@ const SHORTCUTS = [
   ['Nudge', 'Arrows (Shift = 10px)'],
   ['Rotate 90° (selection or whole sketch)', 'Shift + R · Shift + Alt + R'],
   ['Group · Ungroup', 'G · Shift + G (or ⌘G · ⇧⌘G)'],
+  ['Lock selection · Unlock all', 'Shift + L · Shift + Alt + L'],
+  ['Align left · center · right', 'Alt + A · Alt + H · Alt + D'],
+  ['Align top · middle · bottom', 'Alt + W · Alt + V · Alt + S'],
+  ['Distribute horizontally · vertically', 'Shift + Alt + H · Shift + Alt + V'],
   ['Bring to front · back', '] · ['],
   ['Edit text', 'Double-click'],
   ['Keep proportions', 'Shift while resizing'],
@@ -73,7 +91,7 @@ function relTime(iso) {
   return new Date(iso).toLocaleString();
 }
 
-export default function Editor({ boardId, dark, setDark, onHome }) {
+export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [title, setTitle] = useState('Untitled sketch');
@@ -96,6 +114,16 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   const [hoverCursor, setHoverCursor] = useState(null);
   const [toast, setToast] = useState('');
   const [save, setSave] = useState({ state: 'idle', at: null });
+  const [role, setRole] = useState('owner'); // 'owner' | 'edit' | 'view'
+  const [account, setAccount] = useState(null);
+  const [people, setPeople] = useState([]);
+  const [needSignIn, setNeedSignIn] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [share, setShare] = useState({ state: 'idle', view: '', edit: '', people: 0 });
+  const isOwner = role === 'owner';
+  const readOnly = role === 'view';
+  const isGuest = canSignIn && (!account || account.isGuest);
 
   const rootRef = useRef(null);
   const svgRef = useRef(null);
@@ -103,6 +131,8 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   const importRef = useRef(null);
   const toastRef = useRef(null);
   const pending = useRef(null);
+  const lastSeen = useRef(null); // updated_at of the newest version we have
+  const skipSave = useRef(false); // set when a change came from another editor
   const camRef = useRef(cam);
   camRef.current = cam;
 
@@ -110,10 +140,23 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
 
   useEffect(() => {
     let alive = true;
-    getBoard(boardId)
-      .then((b) => {
+    (async () => {
+      if (joinToken) {
+        // Opening a share link: join with the link's role, then drop the token from the address bar.
+        const res = await joinBoard(boardId, joinToken);
+        if (res === 'signin') return { signin: true };
+        window.history.replaceState(null, '', `#/b/${boardId}`);
+        if (!res) throw new Error('This share link is no longer valid. Ask the owner for a new one.');
+      }
+      const [b, r] = await Promise.all([getBoard(boardId), myRole(boardId)]);
+      return { b, r };
+    })()
+      .then(({ b, r, signin }) => {
         if (!alive) return;
+        if (signin) return setNeedSignIn(true);
         if (!b) return setLoadError('This sketch does not exist, or it was deleted.');
+        setRole(r || 'view');
+        lastSeen.current = b.updated_at;
         setTitle(b.title);
         setShapes(Array.isArray(b.shapes) ? b.shapes : []);
         setSave({ state: 'saved', at: b.updated_at });
@@ -123,7 +166,50 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boardId]);
+
+  // Who is signed in (Google or guest). Updates after sign-in / sign-out.
+  useEffect(() => {
+    getAccount().then(setAccount).catch(() => {});
+    return onAccountChange(setAccount);
+  }, []);
+
+  // Presence: show who else is on this board right now.
+  useEffect(() => {
+    if (!loaded || !canShare || !account) return;
+    return joinPresence(boardId, { id: account.id, name: account.name, avatar: account.avatar, role: isOwner ? 'edit' : role }, setPeople);
+  }, [loaded, boardId, account, role, isOwner]);
+
+  // Live collaboration: pull in edits saved by other people on this board.
+  useEffect(() => {
+    if (!loaded || !canShare) return;
+    let busy = false;
+    const refresh = async () => {
+      if (busy || pending.current || drag.current || document.hidden) return;
+      busy = true;
+      try {
+        const b = await getBoard(boardId);
+        if (!b || !b.updated_at || b.updated_at <= (lastSeen.current || '')) return;
+        if (pending.current || drag.current) return; // local edit started meanwhile; ours wins
+        lastSeen.current = b.updated_at;
+        skipSave.current = true;
+        setShapes(Array.isArray(b.shapes) ? b.shapes : []);
+        setTitle(b.title);
+        setSave({ state: 'saved', at: b.updated_at });
+      } catch {
+        /* offline: try again on the next tick */
+      } finally {
+        busy = false;
+      }
+    };
+    const stop = watchBoard(boardId, refresh);
+    const timer = setInterval(refresh, 4000);
+    return () => {
+      stop();
+      clearInterval(timer);
+    };
+  }, [loaded, boardId]);
 
   // Center the view on content once loaded.
   useEffect(() => {
@@ -139,6 +225,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     setSave((s) => ({ ...s, state: 'saving' }));
     try {
       const row = await saveBoard(boardId, job.patch);
+      lastSeen.current = row.updated_at;
       setSave({ state: 'saved', at: row.updated_at });
     } catch (e) {
       setSave((s) => ({ ...s, state: 'error', message: e.message }));
@@ -146,13 +233,17 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   }, [boardId]);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || readOnly) return;
+    if (skipSave.current) {
+      skipSave.current = false; // this change came from someone else; it is already saved
+      return;
+    }
     if (pending.current) clearTimeout(pending.current.timer);
     const job = { patch: { shapes, title: title.trim() || 'Untitled sketch', dark }, timer: null };
     job.timer = setTimeout(flush, 700);
     pending.current = job;
     setSave((s) => (s.state === 'error' ? s : { ...s, state: 'dirty' }));
-  }, [shapes, title, dark, loaded, flush]);
+  }, [shapes, title, dark, loaded, readOnly, flush]);
 
   // Save before the tab closes and when leaving the editor.
   useEffect(() => {
@@ -205,12 +296,14 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   /* ---------- history ---------- */
 
   const commit = useCallback((before, next) => {
+    if (readOnly) return;
     setPast((p) => [...p.slice(-99), before]);
     setFuture([]);
     setShapes(routeConnectors(next));
-  }, []);
+  }, [readOnly]);
 
   const undo = () => {
+    if (readOnly) return;
     if (!past.length) return say('Nothing to undo');
     setFuture((f) => [shapes, ...f]);
     setShapes(past[past.length - 1]);
@@ -219,6 +312,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   };
 
   const redo = () => {
+    if (readOnly) return;
     if (!future.length) return say('Nothing to redo');
     setPast((p) => [...p, shapes]);
     setShapes(future[0]);
@@ -288,6 +382,86 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     if (!ids.size) return;
     commit(shapes, rotateShapes(shapes, ids, dir));
     say(selected.length ? 'Rotated selection' : 'Rotated sketch');
+  }
+
+  function toggleLock() {
+    if (!selected.length) return say('Select shapes to lock');
+    commit(shapes, shapes.map((s) => (selSet.has(s.id) ? { ...s, locked: true } : s)));
+    setSelected([]);
+    say(`Locked ${selected.length} shape${selected.length > 1 ? 's' : ''} · Shift+Alt+L unlocks all`);
+  }
+
+  function unlockAll() {
+    if (!shapes.some((s) => s.locked)) return say('Nothing is locked');
+    commit(shapes, shapes.map((s) => {
+      if (!s.locked) return s;
+      const { locked: _drop, ...rest } = s;
+      return rest;
+    }));
+    say('Unlocked all shapes');
+  }
+
+  function align(how) {
+    const next = alignShapes(shapes, selSet, how);
+    if (next === shapes) return say(how === 'h' || how === 'v' ? 'Select three or more shapes to distribute' : 'Select two or more shapes to align');
+    commit(shapes, next);
+  }
+
+  async function openShare() {
+    setShareOpen((o) => !o);
+    if (shareOpen || !canShare || !isOwner || isGuest) return;
+    setShare((p) => ({ ...p, state: 'loading' }));
+    try {
+      const r = await getShare(boardId);
+      setShare({ state: 'ready', view: r?.view || '', edit: r?.edit || '', people: r?.people || 0 });
+    } catch (e) {
+      setShare((p) => ({ ...p, state: 'error', message: e.message }));
+    }
+  }
+
+  async function toggleLink(r) {
+    const on = !!share[r];
+    if (on && !window.confirm(`Turn off the ${r} link? People who joined with it lose access, and the old link stops working.`)) return;
+    setShare((p) => ({ ...p, state: 'loading' }));
+    try {
+      if (on) {
+        await disableShare(boardId, r);
+        setShare((p) => ({ ...p, state: 'ready', [r]: '' }));
+        say('Link turned off');
+      } else {
+        await flush();
+        const token = await enableShare(boardId, r);
+        setShare((p) => ({ ...p, state: 'ready', [r]: token }));
+        copyLink(shareUrl(boardId, token));
+      }
+    } catch (e) {
+      setShare((p) => ({ ...p, state: 'error', message: e.message }));
+    }
+  }
+
+  function copyLink(link) {
+    navigator.clipboard?.writeText(link).then(() => say('Link copied'), () => say('Could not copy — select the link and copy it'));
+  }
+
+  async function doSignIn() {
+    try {
+      await flush();
+      await signInWithGoogle();
+    } catch (e) {
+      say(e.message);
+    }
+  }
+
+  async function doSignOut() {
+    setAccountOpen(false);
+    await flush();
+    await signOut();
+    onHome();
+  }
+
+  function openAI() {
+    if (isGuest) return say('Sign in with Google to use Draw with AI');
+    setAiOpen((o) => !o);
   }
 
   function clearAll() {
@@ -378,7 +552,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   function onPointerDown(e) {
     if (textEdit) return; // blur of the text box commits it first
     setExportOpen(false);
-    if (e.button === 1 || spaceHeld || tool === 'hand') {
+    if (e.button === 1 || spaceHeld || tool === 'hand' || readOnly) {
       drag.current = { mode: 'pan', sx: e.clientX, sy: e.clientY, cam0: cam };
       return capture(e);
     }
@@ -617,6 +791,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
   }
 
   function onDoubleClick(e) {
+    if (readOnly) return;
     if (tool !== 'select' && tool !== 'text') return;
     const p = toWorld(e);
     const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z);
@@ -729,6 +904,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
+      if (readOnly && !(mod ? k === 'c' : ['Escape', '?', '0', '=', '+', '-', ' '].includes(e.key))) return;
 
       if (e.code === 'KeyG' && !e.altKey) {
         e.preventDefault(); // G or ⌘G groups, Shift+G or ⇧⌘G ungroups
@@ -764,6 +940,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         setSelected([]);
         setAiOpen(false);
         setExportOpen(false);
+        setShareOpen(false);
         setHelpOpen(false);
         if (drag.current?.mode === 'draw') {
           drag.current = null;
@@ -778,6 +955,18 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         return nudge(dx, dy);
       }
       if (e.code === 'KeyR' && e.shiftKey) return rotate(e.altKey ? -1 : 1);
+      if (e.code === 'KeyL' && e.shiftKey) return e.altKey ? unlockAll() : toggleLock();
+      if (e.altKey && !e.shiftKey) {
+        const how = { KeyA: 'left', KeyH: 'hcenter', KeyD: 'right', KeyW: 'top', KeyV: 'vcenter', KeyS: 'bottom' }[e.code];
+        if (how) {
+          e.preventDefault();
+          return align(how);
+        }
+      }
+      if (e.altKey && e.shiftKey && (e.code === 'KeyH' || e.code === 'KeyV')) {
+        e.preventDefault();
+        return align(e.code === 'KeyH' ? 'h' : 'v');
+      }
       if (e.key === '?') return setHelpOpen((o) => !o);
       if (e.key === ']') return reorder(true);
       if (e.key === '[') return reorder(false);
@@ -813,8 +1002,19 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
     );
   }
 
+  if (needSignIn) {
+    return (
+      <div className="editor-state">
+        <p className="hint-title">Sign in to edit this sketch</p>
+        <p>You were invited to edit. Sign in with Google so others can see who made each change.</p>
+        <button className="primary-btn" onClick={doSignIn}>Sign in with Google</button>
+        <button className="ghost-btn" onClick={onHome}>Not now</button>
+      </div>
+    );
+  }
+
   const cursor = drag.current?.mode === 'pan' ? 'grabbing'
-    : spaceHeld || tool === 'hand' ? 'grab'
+    : spaceHeld || tool === 'hand' || readOnly ? 'grab'
     : tool === 'select' ? hoverCursor || 'default'
     : tool === 'text' ? 'text'
     : tool === 'eraser' ? 'cell' : 'crosshair';
@@ -838,6 +1038,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
               className="title-input"
               value={title}
               onChange={(e) => setTitle(e.target.value.slice(0, 120))}
+              readOnly={readOnly}
               onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
               aria-label="Sketch title"
               spellCheck={false}
@@ -850,7 +1051,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
           </div>
         </div>
 
-        <ToolRail
+        {readOnly ? <span className="view-badge" title="You can look and export, but not change this sketch">👁 View only</span> : <ToolRail
           tool={tool}
           onTool={(t) => {
             setTool(t);
@@ -858,12 +1059,65 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
           }}
           locked={locked}
           onLock={() => setLocked((l) => !l)}
-        />
+        />}
 
         <div className="top-actions">
-          <div className="btn-pair" role="group" aria-label="History">
+          {people.length > 1 && (
+            <div className="presence" aria-label={`${people.length} people here`}>
+              {people.slice(0, 4).map((p) => <Avatar key={p.id} person={{ ...p, you: p.id === account?.id }} />)}
+              {people.length > 4 && <span className="pv-avatar more">+{people.length - 4}</span>}
+            </div>
+          )}
+          {!readOnly && <div className="btn-pair" role="group" aria-label="History">
             <button className="icon-btn" onClick={undo} disabled={!past.length} title="Undo (⌘Z)" aria-label="Undo">↶</button>
             <button className="icon-btn" onClick={redo} disabled={!future.length} title="Redo (⇧⌘Z)" aria-label="Redo">↷</button>
+          </div>}
+          <div className="menu-wrap">
+            <button className="ghost-btn share-btn" onClick={openShare} aria-expanded={shareOpen}>Share</button>
+            {shareOpen && (
+              <div className="share-panel" role="dialog" aria-label="Share sketch">
+                <header className="sp-head">
+                  <h3>Share sketch</h3>
+                  <button className="sp-x" onClick={() => setShareOpen(false)} aria-label="Close">✕</button>
+                </header>
+                {!canShare ? (
+                  <p className="sp-note">Sharing needs the cloud version. This copy keeps sketches in this browser only.</p>
+                ) : !isOwner ? (
+                  <>
+                    <p className="sp-label">{readOnly ? 'You can view' : 'You can edit'}</p>
+                    <p className="sp-note">{readOnly ? 'You can look around and export, but not change this sketch.' : 'Your changes save for everyone on this sketch.'} Only the owner can change who has access.</p>
+                    <button className="sp-primary" onClick={() => copyLink(window.location.href)}><span aria-hidden="true">🔗</span> Copy link</button>
+                  </>
+                ) : isGuest ? (
+                  <>
+                    <p className="sp-note">Sign in with Google to share. Your sketches stay yours when you sign in.</p>
+                    <button className="sp-primary" onClick={doSignIn}>Sign in with Google</button>
+                  </>
+                ) : (
+                  <>
+                    {[['view', 'Can view', 'Look and export'], ['edit', 'Can edit', 'Needs a Google sign-in']].map(([r, label, hint]) => (
+                      <div key={r} className={`sp-linkrow ${share[r] ? 'is-on' : ''}`}>
+                        <div className="sp-linkrow-text">
+                          <strong>Anyone with the link · {label}</strong>
+                          <small>{hint}</small>
+                        </div>
+                        <button
+                          className="sp-toggle"
+                          role="switch"
+                          aria-checked={!!share[r]}
+                          aria-label={`${label} link`}
+                          disabled={share.state === 'loading'}
+                          onClick={() => toggleLink(r)}
+                        ><i /></button>
+                        {share[r] && <button className="sp-copy" onClick={() => copyLink(shareUrl(boardId, share[r]))}>Copy</button>}
+                      </div>
+                    ))}
+                    {share.state === 'error' && <p className="sp-note is-error">{share.message}</p>}
+                    <p className="sp-foot">{share.people ? `${share.people} ${share.people > 1 ? 'people have' : 'person has'} joined. ` : ''}Turning a link off removes the people who joined with it. Links never carry API keys.</p>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div className="menu-wrap">
             <button className="ghost-btn" onClick={() => setExportOpen((o) => !o)} aria-expanded={exportOpen}>Export</button>
@@ -873,16 +1127,34 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
                 <button role="menuitem" onClick={() => doExport('png')}>PNG image</button>
                 <button role="menuitem" onClick={() => doExport('svg')}>SVG vector</button>
                 <button role="menuitem" onClick={() => doExport('json')}>JSON (editable)</button>
-                <hr />
-                <button role="menuitem" onClick={() => { importRef.current.click(); setExportOpen(false); }}>Import JSON…</button>
-                <button role="menuitem" className="danger" onClick={() => { clearAll(); setExportOpen(false); }}>Clear canvas</button>
+                {!readOnly && <>
+                  <hr />
+                  <button role="menuitem" onClick={() => { importRef.current.click(); setExportOpen(false); }}>Import JSON…</button>
+                  <button role="menuitem" className="danger" onClick={() => { clearAll(); setExportOpen(false); }}>Clear canvas</button>
+                </>}
               </div>
             )}
             <input ref={importRef} type="file" accept="application/json" hidden onChange={onImportFile} />
           </div>
           <button className="icon-btn" onClick={() => setHelpOpen((o) => !o)} aria-label="Keyboard shortcuts" title="Shortcuts (?)">?</button>
           <button className="icon-btn" onClick={() => setDark((d) => !d)} aria-label="Toggle dark mode" title="Toggle theme">{dark ? '☾' : '☀'}</button>
-          <button className="primary-btn small ai-btn" onClick={() => setAiOpen((o) => !o)} aria-expanded={aiOpen} aria-label="Draw with AI">✦<span> Draw with AI</span></button>
+          {!readOnly && <button className="primary-btn small ai-btn" onClick={openAI} aria-expanded={aiOpen} aria-label="Draw with AI">✦<span> Draw with AI</span></button>}
+          {canSignIn && (isGuest ? (
+            <button className="ghost-btn signin-btn" onClick={doSignIn}>Sign in</button>
+          ) : (
+            <div className="menu-wrap">
+              <button className="account-chip" onClick={() => setAccountOpen((o) => !o)} aria-expanded={accountOpen} aria-label="Account">
+                <Avatar person={{ ...account, role: 'edit', you: true }} size={30} />
+              </button>
+              {accountOpen && (
+                <div className="menu account-menu" role="menu">
+                  <div className="account-who"><strong>{account.name}</strong><small>{account.email}</small></div>
+                  <hr />
+                  <button role="menuitem" onClick={doSignOut}>Sign out</button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </header>
 
@@ -1006,12 +1278,21 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         )}
         {!loaded && <div className="empty-hint"><p className="hint-title">Opening sketch…</p></div>}
 
-        {tool !== 'hand' && tool !== 'eraser' && <StylePanel style={shownStyle} onStyle={applyStyle} />}
+        {!readOnly && tool !== 'hand' && tool !== 'eraser' && <StylePanel style={shownStyle} onStyle={applyStyle} />}
 
-        <div className="zoom-bar rotate-bar" role="group" aria-label="Rotate">
+        {!readOnly && selShapes.filter((x) => !isConnector(x)).length > 1 && (
+          <div className="align-bar" role="group" aria-label="Align">
+            {[['left', '⇤', 'Align left (Alt+A)'], ['hcenter', '↔', 'Align centers (Alt+H)'], ['right', '⇥', 'Align right (Alt+D)'], ['top', '⤒', 'Align top (Alt+W)'], ['vcenter', '↕', 'Align middles (Alt+V)'], ['bottom', '⤓', 'Align bottom (Alt+S)'], ['h', '⋯', 'Distribute horizontally (Shift+Alt+H)'], ['v', '⋮', 'Distribute vertically (Shift+Alt+V)']].map(([how, icon, label]) => (
+              <button key={how} onClick={() => align(how)} title={label} aria-label={label}>{icon}</button>
+            ))}
+            <button onClick={toggleLock} title="Lock selection (Shift+L)" aria-label="Lock selection">🔒</button>
+          </div>
+        )}
+
+        {!readOnly && <div className="zoom-bar rotate-bar" role="group" aria-label="Rotate">
           <button onClick={() => rotate(-1)} aria-label="Rotate 90° counter-clockwise" title={`Rotate ${selected.length ? 'selection' : 'sketch'} 90° left (Shift+Alt+R)`}>↺</button>
           <button onClick={() => rotate(1)} aria-label="Rotate 90° clockwise" title={`Rotate ${selected.length ? 'selection' : 'sketch'} 90° right (Shift+R)`}>↻</button>
-        </div>
+        </div>}
 
         <div className="zoom-bar" role="group" aria-label="Zoom">
           <button onClick={() => zoomBy(1 / 1.2)} aria-label="Zoom out">−</button>
@@ -1042,7 +1323,7 @@ export default function Editor({ boardId, dark, setDark, onHome }) {
         )}
       </main>
 
-      <AIPanel open={aiOpen} onClose={() => setAiOpen(false)} onShapes={addAIShapes} />
+      <AIPanel key={account?.id || 'local'} open={aiOpen && !readOnly} onClose={() => setAiOpen(false)} onShapes={addAIShapes} userId={account?.id || 'local'} />
 
       {toast && <div className="toast" role="status" ref={toastRef}>{toast}</div>}
     </div>

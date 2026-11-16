@@ -139,7 +139,7 @@ export function shapeContains(s, x, y, tol) {
 /** Topmost shape under the point. */
 export function hitTest(shapes, x, y, tol) {
   for (let i = shapes.length - 1; i >= 0; i--) {
-    if (shapeContains(shapes[i], x, y, tol)) return shapes[i];
+    if (!shapes[i].locked && shapeContains(shapes[i], x, y, tol)) return shapes[i];
   }
   return null;
 }
@@ -150,6 +150,7 @@ export function shapesInRect(shapes, r) {
   const x2 = Math.max(r.x, r.x + r.w), y2 = Math.max(r.y, r.y + r.h);
   return shapes
     .filter((s) => {
+      if (s.locked) return false;
       const b = getBounds(s);
       return b.x >= x1 && b.y >= y1 && b.x + b.w <= x2 && b.y + b.h <= y2;
     })
@@ -459,4 +460,32 @@ export function cloneShapes(list) {
     }
     return c;
   });
+}
+
+/** Align (left|hcenter|right|top|vcenter|bottom) or distribute (h|v) the chosen non-connector shapes. */
+export function alignShapes(shapes, ids, how) {
+  const items = shapes.filter((s) => ids.has(s.id) && !isConnector(s)).map((s) => ({ s, b: getBounds(s) }));
+  if (items.length < 2) return shapes;
+  const box = contentBounds(items.map((i) => i.s));
+  const moves = new Map();
+  if (how === 'h' || how === 'v') {
+    if (items.length < 3) return shapes;
+    const [pos, size] = how === 'h' ? ['x', 'w'] : ['y', 'h'];
+    items.sort((a, b) => a.b[pos] - b.b[pos]);
+    const total = items.reduce((n, i) => n + i.b[size], 0);
+    const gap = (box[size] - total) / (items.length - 1);
+    let at = box[pos];
+    for (const i of items) {
+      const d = at - i.b[pos];
+      moves.set(i.s.id, how === 'h' ? [d, 0] : [0, d]);
+      at += i.b[size] + gap;
+    }
+  } else {
+    for (const { s, b } of items) {
+      const dx = { left: box.x - b.x, hcenter: box.x + box.w / 2 - (b.x + b.w / 2), right: box.x + box.w - (b.x + b.w) }[how] ?? 0;
+      const dy = { top: box.y - b.y, vcenter: box.y + box.h / 2 - (b.y + b.h / 2), bottom: box.y + box.h - (b.y + b.h) }[how] ?? 0;
+      moves.set(s.id, [dx, dy]);
+    }
+  }
+  return routeConnectors(shapes.map((s) => (moves.has(s.id) ? translateShape(s, ...moves.get(s.id)) : s)));
 }

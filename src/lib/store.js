@@ -8,7 +8,7 @@ const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const LOCAL_KEY = 'sketchpad.boards.v1';
 const LEGACY_KEY = 'sketchpad.doc.v1';
 
-export const supabase = URL && KEY ? createClient(URL, KEY) : null;
+export const supabase = URL && KEY ? createClient(URL, KEY, { auth: { flowType: 'pkce' } }) : null;
 export const backendName = supabase ? 'supabase' : 'local';
 
 const now = () => new Date().toISOString();
@@ -94,7 +94,7 @@ function ensureSession() {
   return sessionReady;
 }
 
-const COLS = 'id,title,shapes,dark,created_at,updated_at';
+const COLS = 'id,owner,title,shapes,dark,created_at,updated_at';
 
 function check({ data, error }) {
   if (error) throw new Error(error.message);
@@ -146,4 +146,165 @@ export async function generateViaSupabase(prompt) {
   if (error) throw new Error(error.message);
   if (data?.error) throw new Error(data.error);
   return data.text;
+}
+
+/* ---------- accounts (Supabase only) ---------- */
+
+export const canSignIn = !!supabase;
+const RETURN_KEY = 'sketchpad.returnTo';
+
+/** After a Google redirect, the hash route the user started from (read once). */
+export function takeReturnHash() {
+  try {
+    const h = sessionStorage.getItem(RETURN_KEY);
+    sessionStorage.removeItem(RETURN_KEY);
+    return h && h.startsWith('#/') ? h : null;
+  } catch {
+    return null;
+  }
+}
+
+function toAccount(user) {
+  if (!user) return null;
+  const m = user.user_metadata || {};
+  const isGuest = !!user.is_anonymous;
+  return {
+    id: user.id,
+    isGuest,
+    email: user.email || '',
+    name: isGuest ? 'Guest' : m.full_name || m.name || (user.email || 'You').split('@')[0],
+    avatar: !isGuest && /^https:\/\//.test(m.avatar_url || m.picture || '') ? m.avatar_url || m.picture : '',
+  };
+}
+
+/** Current account ({id, isGuest, name, email, avatar}) or null in local mode. */
+export async function getAccount() {
+  if (!supabase) return null;
+  const session = await ensureSession();
+  return toAccount(session?.user);
+}
+
+/** Calls fn(account) whenever the user signs in or out. Returns an unsubscribe fn. */
+export function onAccountChange(fn) {
+  if (!supabase) return () => {};
+  const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (session) fn(toAccount(session.user));
+  });
+  return () => data.subscription.unsubscribe();
+}
+
+/**
+ * Google sign-in. A guest is upgraded in place (same user id, so their boards stay
+ * theirs). If that Google account already exists, we sign in to it instead.
+ */
+export async function signInWithGoogle() {
+  needCloud();
+  const session = await ensureSession();
+  // Google returns to the bare app URL; App.jsx restores this hash afterwards.
+  const redirectTo = window.location.origin + window.location.pathname;
+  try {
+    sessionStorage.setItem(RETURN_KEY, window.location.hash);
+  } catch {
+    /* optional: user lands on Home instead */
+  }
+  if (session?.user?.is_anonymous) {
+    const { error } = await supabase.auth.linkIdentity({ provider: 'google', options: { redirectTo } });
+    if (!error) return;
+    if (!/already|exists|linked/i.test(error.message)) throw new Error(error.message);
+  }
+  const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
+  if (error) throw new Error(error.message);
+}
+
+/** Signs out, forgets this user's saved AI keys, and starts a fresh guest session. */
+export async function signOut() {
+  if (!supabase) return;
+  const { data } = await supabase.auth.getSession();
+  const uid = data.session?.user?.id;
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && uid && k.startsWith(`sketchpad.ai.key.${uid}.`)) localStorage.removeItem(k);
+    }
+  } catch {
+    /* storage blocked */
+  }
+  await supabase.auth.signOut();
+  sessionReady = null;
+  await ensureSession();
+}
+
+/* ---------- sharing (Supabase only) ---------- */
+
+export const canShare = !!supabase;
+
+function needCloud() {
+  if (!supabase) throw new Error('Sharing needs the cloud backend. This copy keeps sketches in this browser only.');
+}
+
+async function rpc(name, args) {
+  needCloud();
+  await ensureSession();
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** {view: token|null, edit: token|null, people: n} — owner only. */
+export const getShare = (id) => rpc('get_share', { b: id });
+export const enableShare = (id, role) => rpc('enable_share', { b: id, r: role });
+export const disableShare = (id, role) => rpc('disable_share', { b: id, r: role });
+/** Returns 'owner' | 'edit' | 'view', 'signin' (guest opened an edit link) or null. */
+export const joinBoard = (id, token) => rpc('join_board', { b: id, token });
+/** 'owner' | 'edit' | 'view' | null, or 'owner' in local mode. */
+export const myRole = (id) => (supabase ? rpc('board_role', { b: id }) : Promise.resolve('owner'));
+
+export function shareUrl(id, token) {
+  return `${window.location.origin}${window.location.pathname}#/b/${id}?k=${encodeURIComponent(token)}`;
+}
+
+/** Calls onChange(row) whenever someone else saves this board. Returns an unsubscribe fn. */
+export function watchBoard(id, onChange) {
+  if (!supabase) return () => {};
+  let channel = null;
+  let stopped = false;
+  ensureSession().then(() => {
+    if (stopped) return;
+    channel = supabase
+      .channel(`board:${id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'boards', filter: `id=eq.${id}` }, (msg) => onChange(msg.new || {}))
+      .subscribe();
+  });
+  return () => {
+    stopped = true;
+    if (channel) supabase.removeChannel(channel);
+  };
+}
+
+/**
+ * Who is on this board right now. me = {id, name, avatar, role}.
+ * Calls onPeople([{id, name, avatar, role}]) with everyone (one entry per user).
+ */
+export function joinPresence(id, me, onPeople) {
+  if (!supabase || !me) return () => {};
+  let channel = null;
+  let stopped = false;
+  ensureSession().then(async () => {
+    if (stopped) return;
+    const { data } = await supabase.auth.getSession();
+    if (data.session) supabase.realtime.setAuth(data.session.access_token);
+    channel = supabase.channel(`presence:${id}`, { config: { private: true, presence: { key: me.id } } });
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        onPeople(Object.values(state).map((metas) => metas[0]).filter(Boolean));
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') channel.track({ id: me.id, name: me.name, avatar: me.avatar, role: me.role });
+      });
+  });
+  return () => {
+    stopped = true;
+    if (channel) supabase.removeChannel(channel);
+  };
 }
