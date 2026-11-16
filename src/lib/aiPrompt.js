@@ -23,7 +23,7 @@ How to build the workflow:
 5. Labels are 1-4 words, Title or sentence case, no punctuation at the end. Never put field lists or paragraphs in a label.
 6. Every node must be connected: each node except the start has at least one incoming edge, and each node except an end has at least one outgoing edge. Retry/error loops go back to the earlier step.
 7. Between 3 and 14 nodes. Ids are "n1", "n2", ... in the order steps happen.
-8. color: "blue" for the start, "green" for success ends, "red" for error steps, "yellow" for decisions, "none" for ordinary steps; "purple" only for external systems.
+8. color: every node is filled. "blue" for the start and for ordinary steps, "yellow" for decisions, "green" for success ends, "red" for error steps, "purple" only for external systems. Never use "none".
 9. direction: "down" for processes and user flows, "right" for pipelines, timelines and data flows.
 10. Edge "label" is "" unless the edge leaves a diamond.
 
@@ -46,7 +46,7 @@ export const WORKFLOW_SCHEMA = {
           id: { type: 'string' },
           label: { type: 'string' },
           shape: { type: 'string', enum: ['rect', 'diamond', 'ellipse'] },
-          color: { type: 'string', enum: ['none', 'yellow', 'green', 'blue', 'red', 'purple'] },
+          color: { type: 'string', enum: ['blue', 'yellow', 'green', 'red', 'purple'] },
         },
       },
     },

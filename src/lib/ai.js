@@ -112,7 +112,7 @@ export function layoutGraph({ nodes: rawNodes, edges: rawEdges, direction }) {
     if (!id || byId.has(id)) continue;
     const label = String(n.label || n.text || id).slice(0, 60);
     const shape = NODE_SHAPES.includes(n.shape) ? n.shape : 'rect';
-    const node = { id, label, shape, fill: COLORS[n.color] || COLORS.none };
+    const node = { id, label, shape, fill: (n.color && n.color !== 'none' && COLORS[n.color]) || (shape === 'diamond' ? COLORS.yellow : COLORS.blue) };
     // wrap long labels onto two lines
     const words = label.split(/\s+/);
     if (label.length > 18 && words.length > 1) {
