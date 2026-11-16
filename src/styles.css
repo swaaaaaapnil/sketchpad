@@ -963,6 +963,8 @@ kbd {
 .editor-state .ghost-btn { margin-top: 8px; }
 
 /* Google's rendered sign-in button */
-.gsi-btn { min-height: 40px; display: flex; justify-content: center; }
-.signin-menu { right: 0; left: auto; width: 260px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.gsi-btn { min-height: 44px; display: flex; justify-content: center; align-items: center; width: 100%; color-scheme: light; }
+/* Google's iframe paints an opaque white box when its color scheme differs from the page. */
+.gsi-btn iframe { color-scheme: light; background: transparent !important; }
+.signin-menu { right: 0; left: auto; width: 280px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .signin-menu .sp-note { margin: 0; }

@@ -178,14 +178,42 @@ function toAccount(user) {
 export async function getAccount() {
   if (!supabase) return null;
   const session = await ensureSession();
+  await claimGuestBoards(session);
   return toAccount(session?.user);
+}
+
+// Signing in to a Google account that already exists changes the user id, which
+// would strand the sketches drawn as a guest. Before signing in, the guest gets a
+// one-time ticket; once signed in, the account redeems it and the boards move over.
+const TRANSFER_KEY = 'sketchpad.guestTransfer';
+
+async function prepareGuestTransfer() {
+  const { data, error } = await supabase.rpc('start_guest_transfer');
+  if (error || !data) return;
+  try { localStorage.setItem(TRANSFER_KEY, data); } catch { /* storage blocked */ }
+}
+
+let claiming = null;
+async function claimGuestBoards(session) {
+  if (!session || session.user?.is_anonymous) return 0;
+  let t = null;
+  try { t = localStorage.getItem(TRANSFER_KEY); } catch { /* storage blocked */ }
+  if (!t) return 0;
+  if (!claiming) {
+    claiming = supabase.rpc('finish_guest_transfer', { t })
+      .then(({ data }) => { try { localStorage.removeItem(TRANSFER_KEY); } catch { /* */ } return data || 0; })
+      .finally(() => { claiming = null; });
+  }
+  return claiming;
 }
 
 /** Calls fn(account) whenever the user signs in or out. Returns an unsubscribe fn. */
 export function onAccountChange(fn) {
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-    if (session) fn(toAccount(session.user));
+    if (!session) return;
+    // Run outside the auth callback (supabase-js deadlocks on awaited calls inside it).
+    setTimeout(() => claimGuestBoards(session).catch(() => 0).finally(() => fn(toAccount(session.user))), 0);
   });
   return () => data.subscription.unsubscribe();
 }
@@ -241,6 +269,7 @@ async function redirectSignIn(isGuest) {
   } catch {
     /* optional: user lands on Home instead */
   }
+  if (isGuest) await prepareGuestTransfer();
   if (isGuest) {
     const { error } = await supabase.auth.linkIdentity({ provider: 'google', options: { redirectTo } });
     if (!error) return;
@@ -266,6 +295,7 @@ export async function signInWithGoogle() {
 
 async function finishIdToken(id, isGuest) {
   const creds = { provider: 'google', token: id.token, nonce: id.nonce };
+  if (isGuest) await prepareGuestTransfer();
   if (isGuest) {
     const { error } = await supabase.auth.linkIdentity(creds);
     if (!error) {
@@ -276,8 +306,9 @@ async function finishIdToken(id, isGuest) {
     }
     if (!/already|exists|linked/i.test(error.message)) throw new Error(error.message);
   }
-  const { error } = await supabase.auth.signInWithIdToken(creds);
+  const { data, error } = await supabase.auth.signInWithIdToken(creds);
   if (error) throw new Error(error.message);
+  await claimGuestBoards(data.session);
 }
 
 /**
@@ -285,7 +316,7 @@ async function finishIdToken(id, isGuest) {
  * Google's popup (named after this site), then signs in / upgrades the guest.
  * Returns false when Google's button can't be used, so the caller can show a fallback.
  */
-export async function renderGoogleButton(el, { onDone, onError, theme = 'outline', text = 'signin_with' } = {}) {
+export async function renderGoogleButton(el, { before, onDone, onError, theme = 'outline', text = 'signin_with' } = {}) {
   if (!GOOGLE_CLIENT_ID || !el) return false;
   needCloud();
   try {
@@ -301,6 +332,7 @@ export async function renderGoogleButton(el, { onDone, onError, theme = 'outline
     callback: async (r) => {
       try {
         if (!r?.credential) throw new Error('Google sign-in was cancelled');
+        await before?.();
         const session = await ensureSession();
         await finishIdToken({ token: r.credential, nonce }, !!session?.user?.is_anonymous);
         onDone?.();
@@ -310,7 +342,7 @@ export async function renderGoogleButton(el, { onDone, onError, theme = 'outline
     },
   });
   el.innerHTML = '';
-  window.google.accounts.id.renderButton(el, { theme, size: 'large', text, shape: 'pill', logo_alignment: 'left' });
+  window.google.accounts.id.renderButton(el, { theme, size: 'large', text, shape: 'pill', logo_alignment: 'left', width: Math.min(Math.max(el.clientWidth || 240, 200), 400) });
   return true;
 }
 

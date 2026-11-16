@@ -187,6 +187,15 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     }
   }, [needSignIn, realUser]);
 
+  // Signing in can switch to another user id (and move this guest's boards to it):
+  // reload the board so ownership and sharing match the new account.
+  const lastAccountId = useRef(null);
+  useEffect(() => {
+    const id = account?.id || null;
+    if (lastAccountId.current && id && id !== lastAccountId.current) setReloadKey((k) => k + 1); // eslint-disable-line react-hooks/set-state-in-effect
+    if (id) lastAccountId.current = id;
+  }, [account?.id]);
+
   // Presence: show who else is on this board right now.
   useEffect(() => {
     if (!loaded || !canShare || !account) return;
@@ -1019,7 +1028,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       <div className="editor-state">
         <p className="hint-title">Sign in to edit this sketch</p>
         <p>You were invited to edit. Sign in with Google so others can see who made each change.</p>
-        <GoogleButton dark={dark} onFallback={doSignIn} onError={(e) => say(e.message)} />
+        <GoogleButton before={flush} dark={dark} onFallback={doSignIn} onError={(e) => say(e.message)} />
         <button className="ghost-btn" onClick={onHome}>Not now</button>
       </div>
     );
@@ -1103,7 +1112,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
                 ) : isGuest ? (
                   <>
                     <p className="sp-note">Sign in with Google to share. Your sketches stay yours when you sign in.</p>
-                    <GoogleButton dark={dark} fallbackClass="sp-primary" onFallback={doSignIn} onError={(e) => say(e.message)} />
+                    <GoogleButton before={flush} dark={dark} fallbackClass="sp-primary" onFallback={doSignIn} onError={(e) => say(e.message)} />
                   </>
                 ) : (
                   <>
@@ -1157,7 +1166,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
               {signInOpen && (
                 <div className="menu signin-menu" role="dialog" aria-label="Sign in">
                   <p className="sp-note">Sign in to share and use Draw with AI. Your sketches stay yours.</p>
-                  <GoogleButton dark={dark} onFallback={doSignIn} onDone={() => setSignInOpen(false)} onError={(e) => say(e.message)} />
+                  <GoogleButton before={flush} dark={dark} onFallback={doSignIn} onDone={() => setSignInOpen(false)} onError={(e) => say(e.message)} />
                 </div>
               )}
             </div>
