@@ -120,6 +120,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [account, setAccount] = useState(null);
   const [people, setPeople] = useState([]);
   const [needSignIn, setNeedSignIn] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [accountOpen, setAccountOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [share, setShare] = useState({ state: 'idle', view: '', edit: '', people: 0 });
@@ -169,13 +170,22 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boardId]);
+  }, [boardId, reloadKey]);
 
   // Who is signed in (Google or guest). Updates after sign-in / sign-out.
   useEffect(() => {
     getAccount().then(setAccount).catch(() => {});
     return onAccountChange(setAccount);
   }, []);
+
+  // An edit link opened as a guest: once they sign in, join the board again.
+  const realUser = !!account && !account.isGuest;
+  useEffect(() => {
+    if (needSignIn && realUser) {
+      setNeedSignIn(false); // eslint-disable-line react-hooks/set-state-in-effect
+      setReloadKey((k) => k + 1);
+    }
+  }, [needSignIn, realUser]);
 
   // Presence: show who else is on this board right now.
   useEffect(() => {

@@ -78,18 +78,15 @@ const local = {
 let sessionReady = null;
 // Anonymous sign-in gives each browser its own user id, so RLS keeps boards private
 // without a login screen. Enable "Anonymous sign-ins" in Supabase Auth settings.
-function ensureSession() {
+// Always reads the live session (it changes on sign-in); only the guest sign-up is shared.
+async function ensureSession() {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) return data.session;
   if (!sessionReady) {
-    sessionReady = (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) return data.session;
-      const { data: signed, error } = await supabase.auth.signInAnonymously();
+    sessionReady = supabase.auth.signInAnonymously().then(({ data: signed, error }) => {
       if (error) throw new Error(`Supabase sign-in failed: ${error.message}`);
       return signed.session;
-    })().catch((e) => {
-      sessionReady = null;
-      throw e;
-    });
+    }).finally(() => { sessionReady = null; });
   }
   return sessionReady;
 }
@@ -271,7 +268,12 @@ async function finishIdToken(id, isGuest) {
   const creds = { provider: 'google', token: id.token, nonce: id.nonce };
   if (isGuest) {
     const { error } = await supabase.auth.linkIdentity(creds);
-    if (!error) return;
+    if (!error) {
+      // The old token still says "anonymous"; get a fresh one so the app and RLS see the account.
+      const { error: e2 } = await supabase.auth.refreshSession();
+      if (e2) throw new Error(e2.message);
+      return;
+    }
     if (!/already|exists|linked/i.test(error.message)) throw new Error(error.message);
   }
   const { error } = await supabase.auth.signInWithIdToken(creds);
