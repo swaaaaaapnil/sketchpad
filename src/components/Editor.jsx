@@ -524,11 +524,16 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
   const selSet = new Set(selected);
   const selShapes = shapes.filter((s) => selSet.has(s.id));
-  const selLocked = selShapes.some((s) => s.locked);
+  // Figma-style groups: a click picks the whole group; double-click steps inside it,
+  // after which clicks pick single members until you click away.
+  const selGroupIds = new Set(selShapes.map((s) => s.groupId).filter(Boolean));
+  const insideGroup = selGroupIds.size === 1 && (() => {
+    const g = [...selGroupIds][0];
+    return shapes.some((s) => s.groupId === g && !selSet.has(s.id));
+  })();
 
   function deleteSelected() {
     if (!selected.length) return;
-    if (selShapes.some((s) => s.locked)) return say('Unlock it first (🔓 or Shift+L)');
     commit(shapes, shapes.filter((s) => !selSet.has(s.id)));
     say(selected.length > 1 ? `Deleted ${selected.length} shapes` : 'Deleted');
     setSelected([]);
@@ -560,24 +565,32 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   }
 
   function nudge(dx, dy) {
-    if (!selected.length || selLocked) return;
+    if (!selected.length) return;
     commit(shapes, detachMoved(shapes.map((s) => (selSet.has(s.id) ? translateShape(s, dx, dy) : s)), selSet));
   }
 
+  const isOneGroup = selected.length > 1 && selGroupIds.size === 1 && selShapes.every((s) => s.groupId) && !insideGroup;
+
   function group() {
-    if (selected.length < 2) return say('Select two or more shapes to group');
+    if (selected.length < 2) return say('Select two or more shapes, then press G');
+    if (isOneGroup) return say('Already a group');
     const groupId = makeId();
-    commit(shapes, shapes.map((s) => (selSet.has(s.id) ? { ...s, groupId } : s)));
-    say(`Grouped ${selected.length} shapes`);
+    // Grouping always merges: picking a group and another shape makes one bigger group.
+    const ids = new Set(withGroups(shapes, selected));
+    commit(shapes, shapes.map((s) => (ids.has(s.id) ? { ...s, groupId } : s)));
+    setSelected([...ids]);
+    say(`Grouped ${ids.size} shapes · Shift+G ungroups`);
   }
 
   function ungroup() {
-    if (!selShapes.some((s) => s.groupId)) return;
+    if (!selGroupIds.size) return say('Nothing grouped here');
+    const ids = new Set(withGroups(shapes, selected));
     commit(shapes, shapes.map((s) => {
-      if (!selSet.has(s.id) || !s.groupId) return s;
+      if (!ids.has(s.id) || !s.groupId) return s;
       const { groupId: _drop, ...rest } = s;
       return rest;
     }));
+    setSelected([...ids]);
     say('Ungrouped');
   }
 
@@ -591,30 +604,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     if (!ids.size) return;
     commit(shapes, rotateShapes(shapes, ids, dir));
     say(selected.length ? 'Rotated selection' : 'Rotated sketch');
-  }
-
-  function toggleLock() {
-    if (!selected.length) return say('Select shapes to lock');
-    if (selLocked) {
-      commit(shapes, shapes.map((s) => {
-        if (!selSet.has(s.id) || !s.locked) return s;
-        const { locked: _drop, ...rest } = s;
-        return rest;
-      }));
-      return say('Unlocked');
-    }
-    commit(shapes, shapes.map((s) => (selSet.has(s.id) ? { ...s, locked: true } : s)));
-    say(`Locked ${selected.length} shape${selected.length > 1 ? 's' : ''} · click it and press 🔓 to unlock`);
-  }
-
-  function unlockAll() {
-    if (!shapes.some((s) => s.locked)) return say('Nothing is locked');
-    commit(shapes, shapes.map((s) => {
-      if (!s.locked) return s;
-      const { locked: _drop, ...rest } = s;
-      return rest;
-    }));
-    say('Unlocked all shapes');
   }
 
   function align(how) {
@@ -748,7 +737,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const frameC = frame && { x: frame.box.x + frame.box.w / 2, y: frame.box.y + frame.box.h / 2 };
 
   function handlePoints() {
-    if (!selBox || tool !== 'select' || textEdit || selLocked) return [];
+    if (!selBox || tool !== 'select' || textEdit) return [];
     if (isLine) {
       const m = curveMid(single);
       return [['p1', single.x, single.y], ['p2', single.x2, single.y2], ['mid', m.x, m.y]];
@@ -828,7 +817,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z, { select: true });
       if (hit) {
         let ids;
-        const hitIds = withGroups(shapes, [hit.id]); // clicking a grouped shape picks the whole group
+        // Inside a group (after a double-click), clicks pick single members; otherwise the whole group.
+        const hitIds = insideGroup && selGroupIds.has(hit.groupId) ? [hit.id] : withGroups(shapes, [hit.id]);
         if (e.shiftKey) {
           ids = selSet.has(hit.id) ? selected.filter((id) => !hitIds.includes(id)) : [...new Set([...selected, ...hitIds])];
           setSelected(ids);
@@ -837,7 +827,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           ids = selSet.has(hit.id) ? selected : hitIds;
           setSelected(ids);
         }
-        if (shapes.some((s) => ids.includes(s.id) && s.locked)) return; // locked: select only, no dragging
         let before = shapes;
         let moveIds = ids;
         if (e.altKey) {
@@ -1062,7 +1051,11 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     if (readOnly) return;
     if (tool !== 'select' && tool !== 'text') return;
     const p = toWorld(e);
-    const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z);
+    const hit = hitTest(shapes, p.x, p.y, HIT_PX / cam.z, { select: true });
+    if (hit?.groupId && selSet.has(hit.id) && !insideGroup && selected.length > 1) {
+      setSelected([hit.id]); // step into the group: just this member
+      return say('Inside group · click away to leave');
+    }
     if (hit?.type === 'text') return startTextEdit(hit);
     if (hit && ['rect', 'ellipse', 'diamond'].includes(hit.type)) {
       // Label a box: start text near its center.
@@ -1223,7 +1216,6 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
         return nudge(dx, dy);
       }
       if (e.code === 'KeyR' && e.shiftKey) return rotate(e.altKey ? -1 : 1);
-      if (e.code === 'KeyL' && e.shiftKey) return e.altKey ? unlockAll() : toggleLock();
       if (e.altKey && !e.shiftKey) {
         const how = { KeyA: 'left', KeyH: 'hcenter', KeyD: 'right', KeyW: 'top', KeyV: 'vcenter', KeyS: 'bottom' }[e.code];
         if (how) {
@@ -1465,6 +1457,11 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
                 return <rect key={s.id} x={b.x} y={b.y} width={b.w} height={b.h} className="sel-each" strokeWidth={1 / z} pointerEvents="none" transform={a ? `rotate(${(a * 180) / Math.PI} ${b.x + b.w / 2} ${b.y + b.h / 2})` : undefined} />;
               })}
 
+            {insideGroup && tool === 'select' && (() => {
+              const g = [...selGroupIds][0];
+              const b = contentBounds(shapes.filter((x) => x.groupId === g));
+              return <rect x={b.x - 6 / z} y={b.y - 6 / z} width={b.w + 12 / z} height={b.h + 12 / z} className="group-box" strokeWidth={1 / z} strokeDasharray={`${4 / z} ${3 / z}`} pointerEvents="none" />;
+            })()}
             {selBox && !textEdit && !isLine && tool === 'select' && (
               <line
                 x1={frameC.x} y1={frame.box.y - 4 / z} x2={frameC.x} y2={frame.box.y - (4 + ROT_OFFSET) / z}
@@ -1587,16 +1584,15 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
         {!readOnly && selShapes.length > 0 && tool === 'select' && !textEdit && (
           <div className="align-bar" role="group" aria-label="Selection">
-            {!selLocked && selShapes.filter((x) => !isConnector(x)).length > 1 && [['left', '⇤', 'Align left (Alt+A)'], ['hcenter', '↔', 'Align centers (Alt+H)'], ['right', '⇥', 'Align right (Alt+D)'], ['top', '⤒', 'Align top (Alt+W)'], ['vcenter', '↕', 'Align middles (Alt+V)'], ['bottom', '⤓', 'Align bottom (Alt+S)'], ['h', '⋯', 'Distribute horizontally (Shift+Alt+H)'], ['v', '⋮', 'Distribute vertically (Shift+Alt+V)']].map(([how, icon, label]) => (
+            {selShapes.filter((x) => !isConnector(x)).length > 1 && [['left', '⇤', 'Align left (Alt+A)'], ['hcenter', '↔', 'Align centers (Alt+H)'], ['right', '⇥', 'Align right (Alt+D)'], ['top', '⤒', 'Align top (Alt+W)'], ['vcenter', '↕', 'Align middles (Alt+V)'], ['bottom', '⤓', 'Align bottom (Alt+S)'], ['h', '⋯', 'Distribute horizontally (Shift+Alt+H)'], ['v', '⋮', 'Distribute vertically (Shift+Alt+V)']].map(([how, icon, label]) => (
               <button key={how} onClick={() => align(how)} title={label} aria-label={label}>{icon}</button>
             ))}
-            {!selLocked && selected.length > 1 && !(selShapes[0].groupId && selShapes.every((s) => s.groupId === selShapes[0].groupId)) && (
-              <button onClick={group} title="Group (G or ⌘G)" aria-label="Group selection" className="text-btn">Group</button>
+            {selected.length > 1 && !isOneGroup && (
+              <button onClick={group} title="Group (G)" aria-label="Group selection" className="text-btn">Group</button>
             )}
-            {!selLocked && selShapes.some((s) => s.groupId) && (
+            {selGroupIds.size > 0 && (
               <button onClick={ungroup} title="Ungroup (Shift+G)" aria-label="Ungroup selection" className="text-btn">Ungroup</button>
             )}
-            <button onClick={toggleLock} title={selLocked ? 'Unlock (Shift+L)' : 'Lock (Shift+L)'} aria-label={selLocked ? 'Unlock selection' : 'Lock selection'}>{selLocked ? '🔓' : '🔒'}</button>
           </div>
         )}
 

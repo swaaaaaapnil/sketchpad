@@ -199,12 +199,11 @@ export function shapeContains(s, x, y, tol, inside = false) {
 
 /**
  * Topmost shape under the point. With { select: true } (clicks with the select tool),
- * locked shapes can be picked (so they can be unlocked), and clicking inside an
- * unfilled box/ellipse picks it when nothing drawn on top of it was hit.
+ * clicking inside an unfilled box/ellipse picks it when nothing drawn on top was hit.
  */
 export function hitTest(shapes, x, y, tol, { select = false } = {}) {
   for (let i = shapes.length - 1; i >= 0; i--) {
-    if ((select || !shapes[i].locked) && shapeContains(shapes[i], x, y, tol)) return shapes[i];
+    if (shapeContains(shapes[i], x, y, tol)) return shapes[i];
   }
   if (!select) return null;
   for (let i = shapes.length - 1; i >= 0; i--) {
@@ -219,7 +218,6 @@ export function shapesInRect(shapes, r) {
   const x2 = Math.max(r.x, r.x + r.w), y2 = Math.max(r.y, r.y + r.h);
   return shapes
     .filter((s) => {
-      if (s.locked) return false;
       const b = worldBounds(s);
       return b.x >= x1 && b.y >= y1 && b.x + b.w <= x2 && b.y + b.h <= y2;
     })
