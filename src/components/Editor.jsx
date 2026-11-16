@@ -66,7 +66,6 @@ function handleCursor(h, a) {
 }
 const SHORTCUTS = [
   ['Tools', 'V R O D L A P T E H'],
-  ['Keep tool active', 'Q'],
   ['Pan', 'Space + drag · wheel · H'],
   ['Zoom', '⌘ + wheel · pinch · = / −'],
   ['Fit to content', '0'],
