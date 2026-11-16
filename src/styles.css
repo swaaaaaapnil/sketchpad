@@ -310,7 +310,7 @@ kbd {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   flex-wrap: wrap;
-  max-width: calc(100% - 32px);
+  max-width: calc(100% - 230px);
 }
 .style-group {
   display: flex;
@@ -754,7 +754,7 @@ kbd {
 /* ---------- Editor top bar: one row, tools centered ---------- */
 .app > .topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto auto;
   flex-wrap: nowrap;
   gap: 12px;
   padding: 10px 14px;
@@ -775,11 +775,13 @@ kbd {
 
 @media (max-width: 1180px) {
   .app > .topbar .save-state em { display: none; }
+}
+@media (max-width: 1380px) {
   .ai-btn span { display: none; }
   .ai-btn { width: 36px; padding: 0; }
   .tool-btn { width: 34px; }
 }
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
   .app > .topbar { grid-template-columns: minmax(0, 1fr) max-content; }
   .app > .topbar .tool-rail {
     grid-column: 1 / -1; grid-row: 2;
@@ -797,6 +799,25 @@ kbd {
   .ai-panel { width: auto; left: 8px; right: 8px; max-width: none; }
 }
 .app { overflow: hidden; overflow: clip; }
+/* Narrow screens: title row, then actions, then tools, so nothing gets cut off. */
+@media (max-width: 900px) {
+  .app > .topbar { grid-template-columns: minmax(0, 1fr); }
+  .app > .topbar .top-actions {
+    grid-row: 2; justify-self: stretch; justify-content: flex-end;
+    min-width: 0; flex-wrap: wrap;
+  }
+  .app > .topbar .tool-rail { grid-row: 3; }
+  .app > .topbar .title-input { max-width: none; }
+}
+@media (max-width: 520px) {
+  .app > .topbar { gap: 8px; padding: 8px 10px; }
+  .app > .topbar .top-actions { justify-content: flex-start; gap: 5px; }
+  .app > .topbar .top-actions .ghost-btn { padding: 0 9px; }
+  .app > .topbar .top-actions .icon-btn { width: 32px; }
+  .app > .topbar .top-actions .ai-btn { width: 32px; }
+  .app > .topbar .tool-rail { justify-self: stretch; }
+}
+
 
 /* AI panel: bring-your-own-key field */
 .field .field-row {
