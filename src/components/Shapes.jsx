@@ -1,5 +1,5 @@
 import rough from 'roughjs';
-import { curveControl, isCurved, penPath, resolveColor } from '../lib/geometry.js';
+import { angleOf, curveControl, getBounds, isCurved, penPath, resolveColor } from '../lib/geometry.js';
 
 const rc = rough.generator();
 
@@ -86,6 +86,15 @@ function shapePaths(s, dark, onFill) {
 }
 
 export function ShapeView({ shape, dark, onFill = false }) {
+  const a = angleOf(shape);
+  if (a) {
+    const b = getBounds(shape);
+    return (
+      <g transform={`rotate(${(a * 180) / Math.PI} ${b.x + b.w / 2} ${b.y + b.h / 2})`}>
+        <ShapeView shape={{ ...shape, angle: 0 }} dark={dark} onFill={onFill} />
+      </g>
+    );
+  }
   if (shape.type === 'text') {
     return (
       <text

@@ -968,3 +968,34 @@ kbd {
 .gsi-btn iframe { color-scheme: light; background: transparent !important; }
 .signin-menu { right: 0; left: auto; width: 280px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .signin-menu .sp-note { margin: 0; }
+
+/* Collaborators' cursors on the canvas */
+.peer-cursor { transition: transform 90ms linear; }
+.peer-cursor path { fill: var(--ring, #2563eb); stroke: #fff; stroke-width: 1.2; stroke-linejoin: round; }
+.peer-cursor text {
+  font: 600 11px/1 system-ui, sans-serif;
+  fill: #fff;
+  paint-order: stroke;
+  stroke: var(--ring, #2563eb);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+
+/* Share / sign-in cards stay mounted; open and close with a transition so
+   Google's button (an iframe) is already drawn and the card never jumps. */
+.pop-card {
+  animation: none;
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity .14s ease-out, transform .14s ease-out, visibility 0s linear .14s;
+}
+.pop-card.is-open {
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity .14s ease-out, transform .14s ease-out, visibility 0s;
+}
+.signin-menu .gsi-btn, .share-panel .gsi-btn { height: 44px; overflow: hidden; }

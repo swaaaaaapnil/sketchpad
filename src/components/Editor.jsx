@@ -30,22 +30,17 @@ import {
   translateShape,
   withGroups,
   alignShapes,
+  angleOf,
+  rotatePoint,
+  rotateShapeBy,
+  normAngle,
   isConnector,
 } from '../lib/geometry.js';
 import { exportJSON, exportPNG, exportSVG } from '../lib/export.jsx';
-import { backendName, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinPresence, myRole, onAccountChange, saveBoard, shareUrl, signInWithGoogle, signOut, watchBoard } from '../lib/store.js';
+import { backendName, boardVersion, canShare, canSignIn, disableShare, enableShare, getAccount, getBoard, getShare, joinBoard, joinLive, joinPresence, myRole, onAccountChange, saveChanges, shareUrl, signInWithGoogle, signOut } from '../lib/store.js';
+import { addOps, applyOps, chunkOps, diffShapes, emptyOps, hasOps, opsToWire, orderKey, rebaseSnapshot, restoreOps } from '../lib/live.js';
 
-const RING = ['#e8590c', '#1971c2', '#2f9e44', '#9c36b5', '#c2255c', '#0c8599', '#f08c00'];
-const ringFor = (id = '') => RING[[...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % RING.length];
-const initials = (name = '?') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
-
-function Avatar({ person, size = 28 }) {
-  return (
-    <span className="pv-avatar" style={{ '--ring': ringFor(person.id), width: size, height: size }} title={`${person.name}${person.you ? ' (you)' : ''} · ${person.role === 'view' ? 'viewing' : 'editing'}`}>
-      {person.avatar ? <img src={person.avatar} alt="" referrerPolicy="no-referrer" /> : initials(person.name)}
-    </span>
-  );
-}
+import Avatar, { ringFor } from './Avatar.jsx';
 
 gsap.registerPlugin(useGSAP);
 
@@ -55,6 +50,17 @@ const BIND_PX = 14; // how close (screen px) an arrow end must come to a shape t
 const KEY_TOOLS = { v: 'select', r: 'rect', o: 'ellipse', d: 'diamond', l: 'line', a: 'arrow', p: 'pen', t: 'text', e: 'eraser', h: 'hand' };
 const STICKY = new Set(['pen', 'eraser', 'hand']); // stay active without the lock
 const HANDLE_CURSOR = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize', p1: 'move', p2: 'move', mid: 'grab' };
+const ROT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M18.5 9A7 7 0 1 0 19 15" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/><path d="M18.5 9A7 7 0 1 0 19 15" fill="none" stroke="black" stroke-width="1.8" stroke-linecap="round"/><path d="M20.5 4.5v5.5h-5.5z" fill="black" stroke="white" stroke-width="1"/></svg>')}") 12 12, grab`;
+HANDLE_CURSOR.rot = ROT_CURSOR;
+const RESIZE_DIRS = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
+const ROT_OFFSET = 26; // screen px between the selection box and the rotate handle
+const ANGLED_TYPES = new Set(['rect', 'ellipse', 'diamond', 'text']);
+/** Resize cursor for handle h on a shape turned by angle a. */
+function handleCursor(h, a) {
+  const i = RESIZE_DIRS.indexOf(h);
+  if (i < 0 || !a) return HANDLE_CURSOR[h];
+  return HANDLE_CURSOR[RESIZE_DIRS[(((i + Math.round(a / (Math.PI / 4))) % 8) + 8) % 8]];
+}
 const SHORTCUTS = [
   ['Tools', 'V R O D L A P T E H'],
   ['Keep tool active', 'Q'],
@@ -114,6 +120,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const [exportOpen, setExportOpen] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [hoverCursor, setHoverCursor] = useState(null);
+  const [rotView, setRotView] = useState(null); // live angle readout (and turning box) while rotating
   const [toast, setToast] = useState('');
   const [save, setSave] = useState({ state: 'idle', at: null });
   const [role, setRole] = useState('owner'); // 'owner' | 'edit' | 'view'
@@ -133,9 +140,27 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const drag = useRef(null);
   const importRef = useRef(null);
   const toastRef = useRef(null);
-  const pending = useRef(null);
-  const lastSeen = useRef(null); // updated_at of the newest version we have
-  const skipSave = useRef(false); // set when a change came from another editor
+  // Live sync state (see lib/live.js). base = shapes as last sent to / received from others.
+  const base = useRef(new Map());
+  const baseOrder = useRef('');
+  const baseTitle = useRef('');
+  const baseDark = useRef(null);
+  const outbox = useRef(emptyOps()); // local edits not yet broadcast
+  const outTimer = useRef(null);
+  const saveBuf = useRef(emptyOps()); // local edits not yet saved
+  const saveTimer = useRef(null);
+  const saveSince = useRef(0); // when the oldest unsaved edit was made
+  const inflight = useRef(null); // promise of the save in progress
+  const retryMs = useRef(0);
+  const inbox = useRef([]); // others' edits waiting for our drag to finish
+  const touched = useRef(new Map()); // shape id -> when someone else last changed it
+  const snapAt = useRef(new WeakMap()); // undo snapshot -> when it was taken
+  const version = useRef(0);
+  const live = useRef(null);
+  const pres = useRef(null);
+  const latest = useRef({});
+  const [liveState, setLiveState] = useState('connecting');
+  const [cursors, setCursors] = useState({});
   const camRef = useRef(cam);
   camRef.current = cam;
 
@@ -159,9 +184,16 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
         if (signin) return setNeedSignIn(true);
         if (!b) return setLoadError('This sketch does not exist, or it was deleted.');
         setRole(r || 'view');
-        lastSeen.current = b.updated_at;
+        const list = Array.isArray(b.shapes) ? b.shapes : [];
+        base.current = new Map(list.map((x) => [x.id, x]));
+        baseOrder.current = orderKey(list);
+        baseTitle.current = b.title;
+        baseDark.current = null;
+        outbox.current = emptyOps();
+        saveBuf.current = emptyOps();
+        version.current = b.version || 0;
         setTitle(b.title);
-        setShapes(Array.isArray(b.shapes) ? b.shapes : []);
+        setShapes(list);
         setSave({ state: 'saved', at: b.updated_at });
         setLoaded(true);
       })
@@ -199,84 +231,225 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   // Presence: show who else is on this board right now.
   useEffect(() => {
     if (!loaded || !canShare || !account) return;
-    return joinPresence(boardId, { id: account.id, name: account.name, avatar: account.avatar, role: isOwner ? 'edit' : role }, setPeople);
+    const onCursor = (c) => {
+      if (!c?.id) return;
+      setCursors((all) => {
+        const next = { ...all };
+        if (c.gone) delete next[c.id];
+        else next[c.id] = { x: c.x, y: c.y, at: Date.now() };
+        return next;
+      });
+    };
+    const p = joinPresence(boardId, { id: account.id, name: account.name, avatar: account.avatar, role: isOwner ? 'edit' : role }, setPeople, onCursor);
+    pres.current = p;
+    // drop cursors of people who went quiet (closed laptop, lost connection)
+    const purge = setInterval(() => {
+      setCursors((all) => {
+        const now = Date.now();
+        const keep = Object.entries(all).filter(([, c]) => now - c.at < 10000);
+        return keep.length === Object.keys(all).length ? all : Object.fromEntries(keep);
+      });
+    }, 3000);
+    return () => {
+      clearInterval(purge);
+      p.stop();
+      pres.current = null;
+      setCursors({});
+    };
   }, [loaded, boardId, account, role, isOwner]);
 
-  // Live collaboration: pull in edits saved by other people on this board.
-  useEffect(() => {
-    if (!loaded || !canShare) return;
-    let busy = false;
-    const refresh = async () => {
-      if (busy || pending.current || drag.current || document.hidden) return;
-      busy = true;
-      try {
-        const b = await getBoard(boardId);
-        if (!b || !b.updated_at || b.updated_at <= (lastSeen.current || '')) return;
-        if (pending.current || drag.current) return; // local edit started meanwhile; ours wins
-        lastSeen.current = b.updated_at;
-        skipSave.current = true;
-        setShapes(Array.isArray(b.shapes) ? b.shapes : []);
-        setTitle(b.title);
-        setSave({ state: 'saved', at: b.updated_at });
-      } catch {
-        /* offline: try again on the next tick */
-      } finally {
-        busy = false;
-      }
-    };
-    const stop = watchBoard(boardId, refresh);
-    const timer = setInterval(refresh, 4000);
-    return () => {
-      stop();
-      clearInterval(timer);
-    };
-  }, [loaded, boardId]);
+  const lastCursor = useRef(0);
+  const sendCursor = (e) => {
+    if (!pres.current) return;
+    const now = Date.now();
+    if (now - lastCursor.current < 40) return;
+    lastCursor.current = now;
+    const p = toWorld(e);
+    pres.current.cursor(p.x, p.y);
+  };
 
-  // Center the view on content once loaded.
-  useEffect(() => {
-    if (loaded) requestAnimationFrame(() => fitView());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded]);
+  latest.current = { shapes, title, dark };
 
-  const flush = useCallback(async () => {
-    const job = pending.current;
-    if (!job) return;
-    pending.current = null;
-    clearTimeout(job.timer);
-    setSave((s) => ({ ...s, state: 'saving' }));
-    try {
-      const row = await saveBoard(boardId, job.patch);
-      lastSeen.current = row.updated_at;
-      setSave({ state: 'saved', at: row.updated_at });
-    } catch (e) {
-      setSave((s) => ({ ...s, state: 'error', message: e.message }));
+  /* ---------- live collaboration ---------- */
+
+  // Someone else's edit: merge it per shape. Never echo it back or save it (they do).
+  const applyRemote = useCallback((ops) => {
+    const now = Date.now();
+    for (const x of ops.up || []) {
+      touched.current.set(x.id, now);
+      base.current.set(x.id, x);
+      // theirs is newer than our unsent/unsaved copy of the same shape
+      outbox.current.up.delete(x.id);
+      saveBuf.current.up.delete(x.id);
     }
+    for (const id of ops.del || []) {
+      touched.current.set(id, now);
+      base.current.delete(id);
+      outbox.current.up.delete(id);
+      saveBuf.current.up.delete(id);
+    }
+    if (ops.up?.length || ops.del?.length || ops.ord) {
+      setShapes((prev) => {
+        const next = applyOps(prev, ops);
+        if (orderKey(prev) === baseOrder.current) baseOrder.current = orderKey(next);
+        return next;
+      });
+    }
+    if (typeof ops.title === 'string') {
+      baseTitle.current = ops.title;
+      setTitle(ops.title);
+    }
+  }, []);
+
+  // Reload from the server when we may have missed edits, keeping our unsaved ones on top.
+  const resync = useCallback(async () => {
+    if (inflight.current || drag.current) return false;
+    const b = await getBoard(boardId);
+    if (!b || inflight.current || drag.current) return false;
+    const mine = opsToWire(restoreOps(addOps(emptyOps(), opsToWire(outbox.current)), saveBuf.current));
+    const list = Array.isArray(b.shapes) ? b.shapes : [];
+    base.current = new Map(list.map((x) => [x.id, x]));
+    baseOrder.current = orderKey(list);
+    baseTitle.current = b.title;
+    version.current = Math.max(version.current, b.version || 0);
+    setShapes(applyOps(list, mine));
+    setTitle(mine.title ?? b.title);
+    return true;
   }, [boardId]);
 
+  const flushOut = useCallback(() => {
+    clearTimeout(outTimer.current);
+    outTimer.current = null;
+    const o = outbox.current;
+    if (!hasOps(o)) return;
+    outbox.current = emptyOps();
+    const wire = opsToWire(o);
+    delete wire.dark; // the theme is personal; it is saved, not pushed to others
+    if (!wire.up.length && !wire.del.length && !wire.ord && wire.title === undefined) return;
+    for (const part of chunkOps(wire)) live.current?.send('ops', { ops: part });
+  }, []);
+
+  const flush = useCallback(async () => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    if (inflight.current) await inflight.current.catch(() => {});
+    const take = saveBuf.current;
+    if (!hasOps(take)) return;
+    saveBuf.current = emptyOps();
+    setSave((s) => ({ ...s, state: 'saving' }));
+    const job = saveChanges(boardId, opsToWire(take), () => ({
+      shapes: latest.current.shapes,
+      title: latest.current.title.trim() || 'Untitled sketch',
+      dark: latest.current.dark,
+    }));
+    inflight.current = job;
+    let retry = 0;
+    try {
+      const row = await job;
+      retryMs.current = 0;
+      version.current = Math.max(version.current, row.version || 0);
+      live.current?.send('saved', { version: row.version });
+      setSave({ state: hasOps(saveBuf.current) ? 'dirty' : 'saved', at: row.updated_at });
+    } catch (e) {
+      restoreOps(saveBuf.current, take);
+      if (e.rateLimited) {
+        retry = 1500;
+        setSave((s) => ({ ...s, state: 'saving' }));
+      } else {
+        retryMs.current = Math.min(30000, (retryMs.current || 1500) * 2);
+        retry = retryMs.current;
+        setSave((s) => ({ ...s, state: 'error', message: e.message }));
+      }
+    } finally {
+      inflight.current = null;
+    }
+    if (hasOps(saveBuf.current) && !saveTimer.current) saveTimer.current = setTimeout(flush, retry || 1000);
+  }, [boardId]);
+
+  // Every local change (draw, drag, undo, paste, AI...) lands here: diff, broadcast, batch the save.
   useEffect(() => {
     if (!loaded || readOnly) return;
-    if (skipSave.current) {
-      skipSave.current = false; // this change came from someone else; it is already saved
-      return;
+    const d = diffShapes(base.current, baseOrder.current, shapes);
+    const ops = { up: d.up, del: d.del, ord: d.ord };
+    for (const x of d.up) base.current.set(x.id, x);
+    for (const id of d.del) base.current.delete(id);
+    baseOrder.current = d.key;
+    const t = title.trim() || 'Untitled sketch';
+    if (t !== baseTitle.current) {
+      ops.title = t;
+      baseTitle.current = t;
     }
-    if (pending.current) clearTimeout(pending.current.timer);
-    const job = { patch: { shapes, title: title.trim() || 'Untitled sketch', dark }, timer: null };
-    job.timer = setTimeout(flush, 700);
-    pending.current = job;
-    setSave((s) => (s.state === 'error' ? s : { ...s, state: 'dirty' }));
-  }, [shapes, title, dark, loaded, readOnly, flush]);
+    if (baseDark.current !== null && dark !== baseDark.current) ops.dark = dark;
+    baseDark.current = dark;
+    if (!ops.up.length && !ops.del.length && !ops.ord && ops.title === undefined && ops.dark === undefined) return;
 
-  // Save before the tab closes and when leaving the editor.
+    addOps(outbox.current, ops);
+    if (!outTimer.current) outTimer.current = setTimeout(flushOut, 50); // ~20 updates/s while dragging
+
+    if (!hasOps(saveBuf.current)) saveSince.current = Date.now();
+    addOps(saveBuf.current, ops);
+    clearTimeout(saveTimer.current);
+    // save 1s after the last edit, but at least every 4s during non-stop drawing
+    const wait = Math.max(0, Math.min(1000, saveSince.current + 4000 - Date.now()));
+    saveTimer.current = setTimeout(flush, inflight.current ? Math.max(wait, 300) : wait);
+    setSave((s) => (s.state === 'error' ? s : { ...s, state: 'dirty' }));
+  }, [shapes, title, dark, loaded, readOnly, flush, flushOut]);
+
+  // The live channel: others' edits arrive here in real time.
   useEffect(() => {
-    const onUnload = () => pending.current && flush();
-    window.addEventListener('beforeunload', onUnload);
+    if (!loaded || !canShare || !account) return;
+    const ch = joinLive(boardId, account.id, {
+      onOps: (ops) => (drag.current ? inbox.current.push(ops) : applyRemote(ops)),
+      onSaved: (v) => {
+        if (v) version.current = Math.max(version.current, v);
+      },
+      onStatus: (st, first) => {
+        setLiveState(st);
+        // after a reconnect (or a slow first join), catch up on anything we missed
+        if (st === 'live') boardVersion(boardId).then((v) => v > version.current && resync()).catch(() => {});
+        void first;
+      },
+    });
+    live.current = ch;
+    // apply edits that arrived mid-drag; every 20s check the saved version for missed edits
+    const drain = setInterval(() => {
+      if (!drag.current && inbox.current.length) {
+        const q = inbox.current;
+        inbox.current = [];
+        q.forEach(applyRemote);
+      }
+    }, 100);
+    const check = setInterval(() => {
+      if (document.hidden) return;
+      boardVersion(boardId).then((v) => v > version.current && resync()).catch(() => {});
+    }, 20000);
     return () => {
-      window.removeEventListener('beforeunload', onUnload);
+      clearInterval(drain);
+      clearInterval(check);
+      flushOut();
+      ch.stop();
+      live.current = null;
+    };
+  }, [loaded, boardId, account, applyRemote, resync, flushOut]);
+
+  // Save before the tab closes or hides, and when leaving the editor.
+  useEffect(() => {
+    const onUnload = () => {
+      flushOut();
       flush();
     };
-  }, [flush]);
+    const onHide = () => document.visibilityState === 'hidden' && onUnload();
+    window.addEventListener('beforeunload', onUnload);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+      document.removeEventListener('visibilitychange', onHide);
+      onUnload();
+    };
+  }, [flush, flushOut]);
 
   async function goHome() {
+    flushOut();
     await flush();
     onHome();
   }
@@ -318,6 +491,7 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
   const commit = useCallback((before, next) => {
     if (readOnly) return;
+    snapAt.current.set(before, Date.now());
     setPast((p) => [...p.slice(-99), before]);
     setFuture([]);
     setShapes(routeConnectors(next));
@@ -326,8 +500,12 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const undo = () => {
     if (readOnly) return;
     if (!past.length) return say('Nothing to undo');
+    const target = past[past.length - 1];
+    const since = snapAt.current.get(target) ?? 0;
+    snapAt.current.set(shapes, Date.now());
     setFuture((f) => [shapes, ...f]);
-    setShapes(past[past.length - 1]);
+    // keep what collaborators changed since this snapshot
+    setShapes(rebaseSnapshot(target, shapes, touched.current, since));
     setPast(past.slice(0, -1));
     setSelected([]);
   };
@@ -335,8 +513,11 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   const redo = () => {
     if (readOnly) return;
     if (!future.length) return say('Nothing to redo');
+    const target = future[0];
+    const since = snapAt.current.get(target) ?? 0;
+    snapAt.current.set(shapes, Date.now());
     setPast((p) => [...p, shapes]);
-    setShapes(future[0]);
+    setShapes(rebaseSnapshot(target, shapes, touched.current, since));
     setFuture(future.slice(1));
     setSelected([]);
   };
@@ -399,7 +580,12 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   }
 
   function rotate(dir) {
-    const ids = selected.length ? selSet : new Set(shapes.map((s) => s.id));
+    if (selected.length && selBox) {
+      const c = { x: selBox.x + selBox.w / 2, y: selBox.y + selBox.h / 2 };
+      commit(shapes, routeConnectors(shapes.map((s) => (selSet.has(s.id) ? rotateShapeBy(s, (dir * Math.PI) / 2, c) : s))));
+      return say('Rotated selection');
+    }
+    const ids = new Set(shapes.map((s) => s.id));
     if (!ids.size) return;
     commit(shapes, rotateShapes(shapes, ids, dir));
     say(selected.length ? 'Rotated selection' : 'Rotated sketch');
@@ -545,7 +731,12 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
   const single = selShapes.length === 1 ? selShapes[0] : null;
   const isLine = single && (single.type === 'line' || single.type === 'arrow');
-  const selBox = selShapes.length ? contentBounds(selShapes) : null;
+  const angledSingle = single && ANGLED_TYPES.has(single.type);
+  const selAngle = angledSingle ? angleOf(single) : 0;
+  // The selection frame: a turned shape keeps its own (unrotated) box plus its angle.
+  const selBox = selShapes.length ? (selAngle ? getBounds(single) : contentBounds(selShapes)) : null;
+  const frame = rotView?.box ? rotView : selBox ? { box: selBox, a: selAngle } : null;
+  const frameC = frame && { x: frame.box.x + frame.box.w / 2, y: frame.box.y + frame.box.h / 2 };
 
   function handlePoints() {
     if (!selBox || tool !== 'select' || textEdit) return [];
@@ -553,15 +744,30 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
       const m = curveMid(single);
       return [['p1', single.x, single.y], ['p2', single.x2, single.y2], ['mid', m.x, m.y]];
     }
-    const { x, y, w, h } = selBox;
+    const { x, y, w, h } = frame.box;
     const corners = [['nw', x, y], ['ne', x + w, y], ['se', x + w, y + h], ['sw', x, y + h]];
-    if (single?.type === 'text') return corners;
-    return [...corners, ['n', x + w / 2, y], ['e', x + w, y + h / 2], ['s', x + w / 2, y + h], ['w', x, y + h / 2]];
+    const pts = [...corners, ['rot', x + w / 2, y - (4 + ROT_OFFSET) / cam.z]];
+    if (single?.type !== 'text') pts.push(['n', x + w / 2, y], ['e', x + w, y + h / 2], ['s', x + w / 2, y + h], ['w', x, y + h / 2]);
+    if (!frame.a) return pts;
+    return pts.map(([id, hx, hy]) => {
+      const q = rotatePoint({ x: hx, y: hy }, frameC, frame.a);
+      return [id, q.x, q.y];
+    });
   }
 
   function handleAt(p) {
     const tol = HANDLE_PX / cam.z;
-    return handlePoints().find(([, hx, hy]) => Math.abs(p.x - hx) <= tol && Math.abs(p.y - hy) <= tol)?.[0] ?? null;
+    const pts = handlePoints();
+    const hit = pts.find(([, hx, hy]) => Math.abs(p.x - hx) <= tol && Math.abs(p.y - hy) <= tol)?.[0];
+    if (hit || isLine || !pts.length) return hit ?? null;
+    // Figma-style: just outside a corner, dragging turns the selection.
+    const q = frame.a ? rotatePoint(p, frameC, -frame.a) : p;
+    const { x, y, w, h } = frame.box;
+    const inside = q.x > x && q.x < x + w && q.y > y && q.y < y + h;
+    if (inside) return null;
+    const reach = tol + 16 / cam.z;
+    const near = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].some(([cx, cy]) => Math.hypot(q.x - cx, q.y - cy) <= reach);
+    return near ? 'rot' : null;
   }
 
   /* ---------- pointer ---------- */
@@ -595,10 +801,18 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
 
     if (tool === 'select') {
       const handle = handleAt(p);
+      if (handle === 'rot') {
+        const c = frameC;
+        drag.current = {
+          mode: 'rotate', c, a0: Math.atan2(p.y - c.y, p.x - c.x), base: selAngle, box: angledSingle ? null : selBox,
+          origs: new Map(selShapes.map((s) => [s.id, s])), before: shapes, latest: shapes,
+        };
+        return capture(e);
+      }
       if (handle) {
         drag.current = isLine
           ? { mode: handle === 'mid' ? 'bend' : 'endpoint', id: single.id, which: handle, before: shapes, latest: shapes }
-          : { mode: 'resize', handle, box0: selBox, origs: new Map(selShapes.map((s) => [s.id, s])), before: shapes, latest: shapes };
+          : { mode: 'resize', handle, box0: selBox, rot: selAngle ? { a: selAngle, c: frameC } : null, origs: new Map(selShapes.map((s) => [s.id, s])), before: shapes, latest: shapes };
         return capture(e);
       }
 
@@ -664,12 +878,13 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
   }
 
   function onPointerMove(e) {
+    sendCursor(e);
     const d = drag.current;
     if (!d) {
       if (tool === 'select' && !spaceHeld) {
         const p = toWorld(e);
         const h = handleAt(p);
-        setHoverCursor(h ? HANDLE_CURSOR[h] : hitTest(shapes, p.x, p.y, HIT_PX / cam.z) ? 'move' : null);
+        setHoverCursor(h ? handleCursor(h, frame?.a) : hitTest(shapes, p.x, p.y, HIT_PX / cam.z) ? 'move' : null);
       }
       return;
     }
@@ -693,9 +908,26 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     }
 
     if (d.mode === 'resize') {
-      const nb = resizeBox(d.box0, d.handle, p, e.shiftKey);
-      d.latest = routeConnectors(d.before.map((s) => (d.origs.has(s.id) ? scaleShape(d.origs.get(s.id), d.box0, nb) : s)));
+      const q = d.rot ? rotatePoint(p, d.rot.c, -d.rot.a) : p; // resize a turned shape in its own frame
+      const nb = resizeBox(d.box0, d.handle, q, e.shiftKey);
+      const cl = { x: nb.x + nb.w / 2, y: nb.y + nb.h / 2 };
+      const cw = d.rot ? rotatePoint(cl, d.rot.c, d.rot.a) : cl; // keeps the opposite corner where it was
+      d.latest = routeConnectors(d.before.map((s) => {
+        if (!d.origs.has(s.id)) return s;
+        const scaled = scaleShape(d.origs.get(s.id), d.box0, nb);
+        return d.rot ? translateShape(scaled, cw.x - cl.x, cw.y - cl.y) : scaled;
+      }));
       setShapes(d.latest);
+      return;
+    }
+
+    if (d.mode === 'rotate') {
+      let total = d.base + Math.atan2(p.y - d.c.y, p.x - d.c.x) - d.a0;
+      if (e.shiftKey) total = Math.round(total / (Math.PI / 12)) * (Math.PI / 12); // 15° steps
+      const delta = total - d.base;
+      d.latest = routeConnectors(d.before.map((s) => (d.origs.has(s.id) ? rotateShapeBy(d.origs.get(s.id), delta, d.c) : s)));
+      setShapes(d.latest);
+      setRotView({ box: d.box, a: delta, deg: Math.round((normAngle(total) * 180) / Math.PI), at: p });
       return;
     }
 
@@ -789,6 +1021,11 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     if (d.mode === 'move') {
       if (d.moved) commit(d.base, d.latest);
       else if (d.before !== d.base) setShapes(d.base); // alt-click without drag: drop the copy
+      return;
+    }
+    if (d.mode === 'rotate') {
+      setRotView(null);
+      if (d.latest !== d.before) commit(d.before, d.latest);
       return;
     }
     if ((d.mode === 'resize' || d.mode === 'endpoint' || d.mode === 'bend' || d.mode === 'erase') && d.latest !== d.before) {
@@ -1046,8 +1283,10 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
     dirty: 'Unsaved changes',
     saving: 'Saving…',
     saved: `Saved ${relTime(save.at)}`,
-    error: 'Not saved — retrying on next change',
+    error: 'Not saved — retrying',
   }[save.state];
+  const together = people.length > 1;
+  const reconnecting = canShare && account && together && liveState === 'offline';
 
   return (
     <div className="app" ref={rootRef}>
@@ -1066,8 +1305,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
             />
             <span className={`save-state is-${save.state}`} title={save.message || ''}>
               <i aria-hidden="true" />
-              {saveLabel}
-              <em>{backendName === 'supabase' ? ' · cloud' : ' · this browser'}</em>
+              {reconnecting ? 'Reconnecting…' : saveLabel}
+              <em>{backendName !== 'supabase' ? ' · this browser' : together && liveState === 'live' ? ' · live' : ' · cloud'}</em>
             </span>
           </div>
         </div>
@@ -1095,8 +1334,9 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           </div>}
           <div className="menu-wrap">
             <button className="ghost-btn share-btn" onClick={openShare} aria-expanded={shareOpen}>Share</button>
-            {shareOpen && (
-              <div className="share-panel" role="dialog" aria-label="Share sketch">
+            {(
+              // always mounted (hidden when closed) so Google's button is ready and nothing redraws on open
+              <div className={`share-panel pop-card ${shareOpen ? 'is-open' : ''}`} role="dialog" aria-label="Share sketch" aria-hidden={!shareOpen} inert={!shareOpen}>
                 <header className="sp-head">
                   <h3>Share sketch</h3>
                   <button className="sp-x" onClick={() => setShareOpen(false)} aria-label="Close">✕</button>
@@ -1163,8 +1403,8 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           {canSignIn && (isGuest ? (
             <div className="menu-wrap">
               <button className="ghost-btn signin-btn" onClick={() => setSignInOpen((o) => !o)} aria-expanded={signInOpen}>Sign in</button>
-              {signInOpen && (
-                <div className="menu signin-menu" role="dialog" aria-label="Sign in">
+              {(
+                <div className={`menu signin-menu pop-card ${signInOpen ? 'is-open' : ''}`} role="dialog" aria-label="Sign in" aria-hidden={!signInOpen} inert={!signInOpen}>
                   <p className="sp-note">Sign in to share and use Draw with AI. Your sketches stay yours.</p>
                   <GoogleButton before={flush} dark={dark} onFallback={doSignIn} onDone={() => setSignInOpen(false)} onError={(e) => say(e.message)} />
                 </div>
@@ -1196,7 +1436,10 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
-          onPointerLeave={() => setHoverCursor(null)}
+          onPointerLeave={() => {
+            setHoverCursor(null);
+            pres.current?.cursor(null);
+          }}
           onDoubleClick={onDoubleClick}
           role="img"
           aria-label="Drawing canvas"
@@ -1208,15 +1451,24 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
             {selShapes.length > 1 &&
               selShapes.map((s) => {
                 const b = getBounds(s);
-                return <rect key={s.id} x={b.x} y={b.y} width={b.w} height={b.h} className="sel-each" strokeWidth={1 / z} pointerEvents="none" />;
+                const a = angleOf(s);
+                return <rect key={s.id} x={b.x} y={b.y} width={b.w} height={b.h} className="sel-each" strokeWidth={1 / z} pointerEvents="none" transform={a ? `rotate(${(a * 180) / Math.PI} ${b.x + b.w / 2} ${b.y + b.h / 2})` : undefined} />;
               })}
 
+            {selBox && !textEdit && !isLine && tool === 'select' && (
+              <line
+                x1={frameC.x} y1={frame.box.y - 4 / z} x2={frameC.x} y2={frame.box.y - (4 + ROT_OFFSET) / z}
+                className="sel-box" strokeWidth={1.5 / z} pointerEvents="none"
+                transform={frame.a ? `rotate(${(frame.a * 180) / Math.PI} ${frameC.x} ${frameC.y})` : undefined}
+              />
+            )}
             {selBox && !textEdit && !isLine && (
               <rect
-                x={selBox.x - 4 / z}
-                y={selBox.y - 4 / z}
-                width={selBox.w + 8 / z}
-                height={selBox.h + 8 / z}
+                transform={frame.a ? `rotate(${(frame.a * 180) / Math.PI} ${frameC.x} ${frameC.y})` : undefined}
+                x={frame.box.x - 4 / z}
+                y={frame.box.y - 4 / z}
+                width={frame.box.w + 8 / z}
+                height={frame.box.h + 8 / z}
                 className="sel-box"
                 strokeWidth={1.5 / z}
                 strokeDasharray={`${5 / z} ${4 / z}`}
@@ -1224,8 +1476,11 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
                 pointerEvents="none"
               />
             )}
-            {handlePoints().map(([id, hx, hy]) => (
+            {handlePoints().map(([id, hx, hy]) => id === 'rot' ? (
+              <circle key={id} cx={hx} cy={hy} r={5.5 / z} className="sel-handle is-rot" strokeWidth={1.5 / z} pointerEvents="none" />
+            ) : (
               <rect
+                transform={frame?.a && !isLine ? `rotate(${(frame.a * 180) / Math.PI} ${hx} ${hy})` : undefined}
                 key={id}
                 x={hx - 5 / z}
                 y={hy - 5 / z}
@@ -1266,6 +1521,17 @@ export default function Editor({ boardId, joinToken, dark, setDark, onHome }) {
                 pointerEvents="none"
               />
             )}
+            {Object.entries(cursors).map(([id, c]) => {
+              const who = people.find((p) => p.id === id);
+              if (!who) return null;
+              const name = (who.name || 'Someone').split(' ')[0];
+              return (
+                <g key={id} className="peer-cursor" transform={`translate(${c.x} ${c.y}) scale(${1 / z})`} style={{ '--ring': ringFor(id) }} pointerEvents="none">
+                  <path d="M0 0 L0 16 L4.5 12 L7.5 19 L10 18 L7 11 L13 11 Z" />
+                  <text x="14" y="26">{name}</text>
+                </g>
+              );
+            })}
           </g>
         </svg>
 

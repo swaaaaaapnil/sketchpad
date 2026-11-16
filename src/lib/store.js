@@ -91,7 +91,7 @@ async function ensureSession() {
   return sessionReady;
 }
 
-const COLS = 'id,owner,title,shapes,dark,created_at,updated_at';
+const COLS = 'id,owner,title,shapes,dark,version,created_at,updated_at';
 
 function check({ data, error }) {
   if (error) throw new Error(error.message);
@@ -112,10 +112,6 @@ const remote = {
     const row = { title: 'Untitled sketch', shapes: [], dark: false, ...fields };
     return check(await supabase.from('boards').insert(row).select(COLS).single());
   },
-  async save(id, patch) {
-    await ensureSession();
-    return check(await supabase.from('boards').update(patch).eq('id', id).select(COLS).single());
-  },
   async remove(id) {
     await ensureSession();
     check(await supabase.from('boards').delete().eq('id', id));
@@ -127,7 +123,6 @@ const api = supabase ? remote : local;
 export const listBoards = () => api.list();
 export const getBoard = (id) => api.get(id);
 export const createBoard = (fields = {}) => api.create(fields);
-export const saveBoard = (id, patch) => api.save(id, patch);
 export const deleteBoard = (id) => api.remove(id);
 export async function duplicateBoard(id) {
   const src = await api.get(id);
@@ -393,48 +388,118 @@ export function shareUrl(id, token) {
   return `${window.location.origin}${window.location.pathname}#/b/${id}?k=${encodeURIComponent(token)}`;
 }
 
-/** Calls onChange(row) whenever someone else saves this board. Returns an unsubscribe fn. */
-export function watchBoard(id, onChange) {
-  if (!supabase) return () => {};
+/**
+ * Saves a batch of shape changes. In the cloud the server merges them per shape
+ * (save_board_ops), so editors never overwrite each other. Returns {version, updated_at}.
+ * A save that is too fast throws an Error with .rateLimited = true.
+ * snapshot() gives the whole board, used only by the browser-only backend.
+ */
+export async function saveChanges(id, wire, snapshot) {
+  if (!supabase) {
+    const row = await local.save(id, snapshot());
+    return { version: 0, updated_at: row.updated_at };
+  }
+  await ensureSession();
+  const { data, error } = await supabase.rpc('save_board_ops', {
+    b: id,
+    up: wire.up,
+    del: wire.del,
+    ord: wire.ord,
+    new_title: wire.title ?? null,
+    new_dark: wire.dark ?? null,
+  });
+  if (error) {
+    const err = new Error(error.code === 'PT429' ? 'Saving too fast' : error.message);
+    err.rateLimited = error.code === 'PT429';
+    throw err;
+  }
+  return data;
+}
+
+/** Latest saved version number of a board (a tiny read used to spot missed edits). */
+export async function boardVersion(id) {
+  if (!supabase) return 0;
+  await ensureSession();
+  const { data } = await supabase.from('boards').select('version').eq('id', id).maybeSingle();
+  return data?.version ?? 0;
+}
+
+async function privateChannel(topic, config = {}) {
+  await ensureSession();
+  const { data } = await supabase.auth.getSession();
+  if (data.session) supabase.realtime.setAuth(data.session.access_token);
+  return supabase.channel(topic, { config: { private: true, ...config } });
+}
+
+/**
+ * Live edits for a board over a private broadcast channel.
+ * handlers: onOps(ops, from), onSaved(version, from), onStatus('live' | 'connecting' | 'offline', firstTime)
+ * Returns { send(event, payload), stop() }. Viewers can listen but not send.
+ */
+export function joinLive(id, me, { onOps, onSaved, onStatus }) {
+  if (!supabase) return { send() {}, stop() {} };
   let channel = null;
   let stopped = false;
-  ensureSession().then(() => {
-    if (stopped) return;
-    channel = supabase
-      .channel(`board:${id}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'boards', filter: `id=eq.${id}` }, (msg) => onChange(msg.new || {}))
-      .subscribe();
-  });
-  return () => {
-    stopped = true;
-    if (channel) supabase.removeChannel(channel);
+  let joinedOnce = false;
+  onStatus?.('connecting', true);
+  privateChannel(`live:${id}`, { broadcast: { self: false, ack: false } }).then((ch) => {
+    if (stopped) return supabase.removeChannel(ch);
+    channel = ch;
+    ch.on('broadcast', { event: 'ops' }, ({ payload }) => payload?.from !== me && onOps?.(payload.ops || {}, payload.from))
+      .on('broadcast', { event: 'saved' }, ({ payload }) => payload?.from !== me && onSaved?.(payload.version, payload.from))
+      .subscribe((status) => {
+        if (stopped) return;
+        if (status === 'SUBSCRIBED') {
+          onStatus?.('live', !joinedOnce);
+          joinedOnce = true;
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') onStatus?.('offline', false);
+        else if (status === 'CLOSED') onStatus?.('connecting', false);
+      });
+  }).catch(() => onStatus?.('offline', false));
+  return {
+    send(event, payload) {
+      if (!channel || channel.state !== 'joined') return false;
+      channel.send({ type: 'broadcast', event, payload: { ...payload, from: me } });
+      return true;
+    },
+    stop() {
+      stopped = true;
+      if (channel) supabase.removeChannel(channel);
+    },
   };
 }
 
 /**
- * Who is on this board right now. me = {id, name, avatar, role}.
- * Calls onPeople([{id, name, avatar, role}]) with everyone (one entry per user).
+ * Who is on this board right now, and where their pointer is.
+ * me = {id, name, avatar, role}. onPeople([{id, name, avatar, role}]) gets one entry per user;
+ * onCursor({id, x, y} | {id, gone: true}) gets other people's pointers in board coordinates.
+ * Returns { cursor(x, y) | cursor(null), stop() }.
  */
-export function joinPresence(id, me, onPeople) {
-  if (!supabase || !me) return () => {};
+export function joinPresence(id, me, onPeople, onCursor) {
+  if (!supabase || !me) return { cursor() {}, stop() {} };
   let channel = null;
   let stopped = false;
-  ensureSession().then(async () => {
-    if (stopped) return;
-    const { data } = await supabase.auth.getSession();
-    if (data.session) supabase.realtime.setAuth(data.session.access_token);
-    channel = supabase.channel(`presence:${id}`, { config: { private: true, presence: { key: me.id } } });
-    channel
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        onPeople(Object.values(state).map((metas) => metas[0]).filter(Boolean));
-      })
+  privateChannel(`presence:${id}`, { presence: { key: me.id }, broadcast: { self: false } }).then((ch) => {
+    if (stopped) return supabase.removeChannel(ch);
+    channel = ch;
+    ch.on('presence', { event: 'sync' }, () => {
+      const state = ch.presenceState();
+      onPeople(Object.values(state).map((metas) => metas[0]).filter(Boolean));
+    })
+      .on('presence', { event: 'leave' }, ({ key }) => onCursor?.({ id: key, gone: true }))
+      .on('broadcast', { event: 'cursor' }, ({ payload }) => payload?.id !== me.id && onCursor?.(payload))
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') channel.track({ id: me.id, name: me.name, avatar: me.avatar, role: me.role });
+        if (status === 'SUBSCRIBED') ch.track({ id: me.id, name: me.name, avatar: me.avatar, role: me.role });
       });
   });
-  return () => {
-    stopped = true;
-    if (channel) supabase.removeChannel(channel);
+  return {
+    cursor(x, y) {
+      if (!channel || channel.state !== 'joined') return;
+      channel.send({ type: 'broadcast', event: 'cursor', payload: x == null ? { id: me.id, gone: true } : { id: me.id, x: Math.round(x), y: Math.round(y) } });
+    },
+    stop() {
+      stopped = true;
+      if (channel) supabase.removeChannel(channel);
+    },
   };
 }

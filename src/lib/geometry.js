@@ -67,11 +67,71 @@ export function getBounds(s) {
   return { x: s.x, y: s.y, w: s.w, h: s.h };
 }
 
+/* ---------- rotation ----------
+ * Boxes, ellipses, diamonds and text carry an optional `angle` (radians, clockwise)
+ * around their center; x/y/w/h stay the unrotated box. Pen strokes and connectors
+ * have no angle: rotating them moves their points.
+ */
+const ANGLED = new Set(['rect', 'ellipse', 'diamond', 'text']);
+export const angleOf = (s) => (ANGLED.has(s.type) && s.angle) || 0;
+
+/** Point p turned by angle a around c. */
+export function rotatePoint(p, c, a) {
+  if (!a) return { x: p.x, y: p.y };
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const dx = p.x - c.x, dy = p.y - c.y;
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
+}
+
+/** World point expressed in the shape's own, unrotated frame. */
+export function toLocal(s, p) {
+  const a = angleOf(s);
+  return a ? rotatePoint(p, center(s), -a) : p;
+}
+
+/** Axis-aligned bounds of the shape as drawn (rotation included). */
+export function worldBounds(s) {
+  const b = getBounds(s);
+  const a = angleOf(s);
+  if (!a) return b;
+  const c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const pts = [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]].map(([x, y]) => rotatePoint({ x, y }, c, a));
+  const xs = pts.map((q) => q.x), ys = pts.map((q) => q.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  return { x: minX, y: minY, w: Math.max(...xs) - minX, h: Math.max(...ys) - minY };
+}
+
+/** Keeps an angle in (-π, π] and drops float noise near whole turns. */
+export function normAngle(a) {
+  let r = a % (Math.PI * 2);
+  if (r > Math.PI) r -= Math.PI * 2;
+  if (r <= -Math.PI) r += Math.PI * 2;
+  return Math.abs(r) < 1e-6 ? 0 : r;
+}
+
+/** Turns a shape by `a` radians around point c. */
+export function rotateShapeBy(s, a, c) {
+  if (!a) return s;
+  const r = (x, y) => rotatePoint({ x, y }, c, a);
+  if (s.type === 'pen') return { ...s, points: s.points.map(([x, y, pr]) => { const q = r(x, y); return [q.x, q.y, pr]; }) };
+  if (s.type === 'line' || s.type === 'arrow') {
+    const p1 = r(s.x, s.y), p2 = r(s.x2, s.y2);
+    return { ...s, x: p1.x, y: p1.y, x2: p2.x, y2: p2.y };
+  }
+  const b = getBounds(s);
+  const nc = r(b.x + b.w / 2, b.y + b.h / 2);
+  const next = { ...s, x: s.x + (nc.x - (b.x + b.w / 2)), y: s.y + (nc.y - (b.y + b.h / 2)) };
+  const na = normAngle((s.angle || 0) + a);
+  if (na) next.angle = na;
+  else delete next.angle;
+  return next;
+}
+
 export function contentBounds(shapes) {
   if (!shapes.length) return null;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const s of shapes) {
-    const b = getBounds(s);
+    const b = worldBounds(s);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     maxX = Math.max(maxX, b.x + b.w);
@@ -98,6 +158,7 @@ function nearPolyline(pts, x, y, tol, closed) {
 
 /** True when (x, y) touches the shape: its outline, or its inside when filled or text. */
 export function shapeContains(s, x, y, tol) {
+  if (angleOf(s)) ({ x, y } = toLocal(s, { x, y }));
   const filled = s.fill && s.fill !== 'none';
   const t = tol + (s.strokeWidth || 2) / 2;
   switch (s.type) {
@@ -151,7 +212,7 @@ export function shapesInRect(shapes, r) {
   return shapes
     .filter((s) => {
       if (s.locked) return false;
-      const b = getBounds(s);
+      const b = worldBounds(s);
       return b.x >= x1 && b.y >= y1 && b.x + b.w <= x2 && b.y + b.h <= y2;
     })
     .map((s) => s.id);
@@ -327,7 +388,8 @@ export function findBindTarget(shapes, p, tol, skipIds = []) {
     const s = shapes[i];
     if (!BINDABLE.has(s.type) || skipIds.includes(s.id)) continue;
     const b = getBounds(s);
-    if (p.x < b.x - tol || p.x > b.x + b.w + tol || p.y < b.y - tol || p.y > b.y + b.h + tol) continue;
+    const q = toLocal(s, p);
+    if (q.x < b.x - tol || q.x > b.x + b.w + tol || q.y < b.y - tol || q.y > b.y + b.h + tol) continue;
     if (s.type !== 'text') return s;
     textHit ??= s;
   }
@@ -341,8 +403,10 @@ function center(s) {
 
 /** Point on the outline of `s` (plus a small gap) in the direction of `toward`, measured from its center. */
 export function edgePoint(s, toward) {
-  const b = getBounds(s);
+  const a = angleOf(s);
   const c = center(s);
+  if (a) return rotatePoint(edgePoint({ ...s, angle: 0 }, rotatePoint(toward, c, -a)), c, a);
+  const b = getBounds(s);
   let dx = toward.x - c.x, dy = toward.y - c.y;
   if (!dx && !dy) dy = -1;
   const hw = b.w / 2 + BIND_GAP, hh = b.h / 2 + BIND_GAP;
@@ -464,7 +528,7 @@ export function cloneShapes(list) {
 
 /** Align (left|hcenter|right|top|vcenter|bottom) or distribute (h|v) the chosen non-connector shapes. */
 export function alignShapes(shapes, ids, how) {
-  const items = shapes.filter((s) => ids.has(s.id) && !isConnector(s)).map((s) => ({ s, b: getBounds(s) }));
+  const items = shapes.filter((s) => ids.has(s.id) && !isConnector(s)).map((s) => ({ s, b: worldBounds(s) }));
   if (items.length < 2) return shapes;
   const box = contentBounds(items.map((i) => i.s));
   const moves = new Map();

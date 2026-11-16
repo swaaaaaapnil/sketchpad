@@ -5,7 +5,9 @@ import { useGSAP } from '@gsap/react';
 const Hero3D = lazy(() => import('./Hero3D.jsx'));
 import { ShapeView } from './Shapes.jsx';
 import { contentBounds, onFillIds } from '../lib/geometry.js';
-import { backendName, createBoard, deleteBoard, duplicateBoard, listBoards } from '../lib/store.js';
+import { backendName, canSignIn, createBoard, deleteBoard, duplicateBoard, getAccount, listBoards, onAccountChange, signInWithGoogle, signOut } from '../lib/store.js';
+import Avatar from './Avatar.jsx';
+import GoogleButton from './GoogleButton.jsx';
 
 gsap.registerPlugin(useGSAP);
 
@@ -29,7 +31,11 @@ export default function Home({ dark, setDark, onOpen }) {
   const [boards, setBoards] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [account, setAccount] = useState(null);
+  const [menu, setMenu] = useState(null); // 'account' | 'signin' | null
+  const [signingOut, setSigningOut] = useState(false);
   const rootRef = useRef(null);
+  const menuRef = useRef(null);
 
   async function refresh() {
     try {
@@ -43,7 +49,49 @@ export default function Home({ dark, setDark, onOpen }) {
 
   useEffect(() => {
     refresh();
+    if (!canSignIn) return;
+    let live = true;
+    getAccount().then((a) => live && setAccount(a)).catch(() => {});
+    const off = onAccountChange((a) => {
+      if (!live) return;
+      setAccount(a);
+      setMenu(null);
+      refresh();
+    });
+    return () => {
+      live = false;
+      off();
+    };
   }, []);
+
+  // Close the open menu on Escape or a click outside it.
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e) => { if (!menuRef.current?.contains(e.target)) setMenu(null); };
+    const onKey = (e) => { if (e.key === 'Escape') setMenu(null); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
+
+  async function doSignOut() {
+    setSigningOut(true);
+    try {
+      await signOut();
+      setAccount(await getAccount());
+      setMenu(null);
+      await refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  const isGuest = canSignIn && (!account || account.isGuest);
 
   useGSAP(
     () => {
@@ -106,6 +154,30 @@ export default function Home({ dark, setDark, onOpen }) {
             {backendName === 'supabase' ? 'Saved to cloud' : 'Saved in this browser'}
           </span>
           <button className="icon-btn" onClick={() => setDark((d) => !d)} aria-label="Toggle dark mode">{dark ? '☾' : '☀'}</button>
+          {canSignIn && (
+            <div className="menu-wrap" ref={menuRef}>
+              {isGuest ? (
+                <>
+                  <button className="ghost-btn signin-btn" onClick={() => setMenu((m) => (m === 'signin' ? null : 'signin'))} aria-expanded={menu === 'signin'}>Sign in</button>
+                  <div className={`menu signin-menu pop-card ${menu === 'signin' ? 'is-open' : ''}`} role="dialog" aria-label="Sign in" aria-hidden={menu !== 'signin'} inert={menu !== 'signin'}>
+                    <p className="sp-note">Sign in to share and use Draw with AI. Sketches you made as a guest come with you.</p>
+                    <GoogleButton dark={dark} onFallback={() => signInWithGoogle().catch((e) => setError(e.message))} onDone={() => setMenu(null)} onError={(e) => setError(e.message)} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button className="account-chip" onClick={() => setMenu((m) => (m === 'account' ? null : 'account'))} aria-expanded={menu === 'account'} aria-haspopup="menu" aria-label={`Account: ${account.name}`}>
+                    <Avatar person={account} size={30} title={account.name} />
+                  </button>
+                  <div className={`menu account-menu pop-card ${menu === 'account' ? 'is-open' : ''}`} role="menu" aria-hidden={menu !== 'account'} inert={menu !== 'account'}>
+                    <div className="account-who"><strong>{account.name}</strong><small>{account.email}</small></div>
+                    <hr />
+                    <button role="menuitem" onClick={doSignOut} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </nav>
 
